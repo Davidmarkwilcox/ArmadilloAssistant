@@ -1,4 +1,3 @@
-//
 //  Persistence.swift
 //  ArmadilloAssistant
 //
@@ -33,6 +32,15 @@ struct PersistenceController {
 
     init(inMemory: Bool = false) {
         container = NSPersistentCloudKitContainer(name: "ArmadilloAssistant")
+        // CloudKit container binding
+        // NOTE: Keep previews/in-memory stores from attempting CloudKit sync.
+        let storeDescription = container.persistentStoreDescriptions.first
+        if inMemory {
+            storeDescription?.cloudKitContainerOptions = nil
+        } else {
+            storeDescription?.cloudKitContainerOptions =
+                NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.DavidMWilcox.ArmadilloAssistant")
+        }
         if inMemory {
             container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
         }

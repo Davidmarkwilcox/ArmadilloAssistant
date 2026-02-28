@@ -12,10 +12,17 @@ import CoreData
 struct ArmadilloAssistantApp: App {
     let persistenceController = PersistenceController.shared
 
+    init() {
+        // Apply themed metallic red navigation bar appearance
+        Theme.NavigationBar.applyAppearance()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .preferredColorScheme(.dark)
+                .tint(Theme.Colors.crimson)
         }
     }
 }
