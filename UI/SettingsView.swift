@@ -28,7 +28,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                SettingsBrandedHeaderView(title: "Settings")
+                Theme.BrandedHeaderView(title: "Settings")
 
                 List {
                     Section {
@@ -640,37 +640,6 @@ private struct DataManagementSettingsView: View {
     }
 }
 
-// MARK: - 4) Settings branded header (matches Bookings)
-private struct SettingsBrandedHeaderView: View {
-    let title: String
-
-    var body: some View {
-        ZStack {
-            Theme.Colors.crimson
-                .ignoresSafeArea(edges: .top)
-
-            VStack(spacing: 2) {
-                // Brand lockup
-                Theme.WordmarkView(markColor: .white, titleColor: .white)
-                    // The wordmark view is inherently tall; pull the title closer.
-                    .padding(.top, 2)
-
-                Text(title)
-                    .font(Theme.Typography.title(.bold))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.9)
-                    .padding(.top, -6)
-                    .padding(.bottom, 2)
-            }
-            .padding(.horizontal, Theme.Spacing.m)
-        }
-        // Give enough height so the title never clips on small devices / dynamic type.
-        .frame(height: 96)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(title))
-    }
-}
 
 // MARK: - 5) Color helpers (for simple local persistence)
 
