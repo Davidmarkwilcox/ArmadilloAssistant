@@ -47,7 +47,7 @@ struct ContentView: View {
                     Label("Narrative", systemImage: Tab.narrative.systemImageName)
                 }
 
-            PlaceholderScreen(title: "Settings", subtitle: "Partners, notifications, and app preferences.")
+            SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: Tab.settings.systemImageName)
                 }

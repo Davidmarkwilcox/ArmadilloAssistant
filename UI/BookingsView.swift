@@ -1,19 +1,23 @@
 // BookingsView.swift
 // ArmadilloAssistant
-// Standalone Bookings screen (theme-independent).
-// - Shows Filters (in a sheet), Reservations (List), and Reservation Details (sheet).
-// - Uses only vanilla SwiftUI components to avoid gesture/hit-testing issues from custom theming.
+// Bookings screen
+// - Shows an always-visible Filters section and a Reservations section.
+// - Filters: 3 property chips (Barndo/Main/Washington), plus multi-select pickers for Years and Statuses.
+// - Reservations: 15 placeholder rows filtered by selected filters.
+// - Selection: selected row is visibly highlighted and shows a checkmark; tapping opens a detail sheet.
 
 import SwiftUI
 
+// MARK: - 1) BookingsView
+
 struct BookingsView: View {
 
-    // MARK: - 1) Models (Prototype)
+    // MARK: - 1.1 Models (Prototype)
 
     enum Property: String, CaseIterable, Identifiable, Hashable {
         case barndo = "Barndo"
-        case mainStreet = "Main Street"
-        case washingtonHouse = "Washington House"
+        case main = "Main"
+        case washington = "Washington"
 
         var id: String { rawValue }
     }
@@ -54,7 +58,7 @@ struct BookingsView: View {
         }
     }
 
-    // MARK: - 2) Prototype Data
+    // MARK: - 1.2 Prototype Data (15 placeholders)
 
     @State private var allReservations: [Reservation] = {
         let cal = Calendar.current
@@ -64,15 +68,24 @@ struct BookingsView: View {
 
         return [
             Reservation(id: UUID(), property: .barndo, status: .booked, renterFirstName: "John", renterLastName: "Smith", startDate: d(2026, 3, 12), endDate: d(2026, 3, 15)),
-            Reservation(id: UUID(), property: .mainStreet, status: .booked, renterFirstName: "Mia", renterLastName: "Garcia", startDate: d(2026, 2, 26), endDate: d(2026, 2, 28)),
-            Reservation(id: UUID(), property: .washingtonHouse, status: .inquired, renterFirstName: "Evan", renterLastName: "Lee", startDate: d(2026, 4, 2), endDate: d(2026, 4, 6)),
+            Reservation(id: UUID(), property: .main, status: .booked, renterFirstName: "Mia", renterLastName: "Garcia", startDate: d(2026, 2, 26), endDate: d(2026, 2, 28)),
+            Reservation(id: UUID(), property: .washington, status: .inquired, renterFirstName: "Evan", renterLastName: "Lee", startDate: d(2026, 4, 2), endDate: d(2026, 4, 6)),
             Reservation(id: UUID(), property: .barndo, status: .cancelled, renterFirstName: "Ava", renterLastName: "Johnson", startDate: d(2025, 12, 22), endDate: d(2025, 12, 27)),
-            Reservation(id: UUID(), property: .mainStreet, status: .completed, renterFirstName: "Noah", renterLastName: "Brown", startDate: d(2025, 11, 10), endDate: d(2025, 11, 12)),
-            Reservation(id: UUID(), property: .mainStreet, status: .completed, renterFirstName: "Frank", renterLastName: "Franky", startDate: d(2026, 11, 10), endDate: d(2026, 11, 12))
+            Reservation(id: UUID(), property: .main, status: .completed, renterFirstName: "Noah", renterLastName: "Brown", startDate: d(2025, 11, 10), endDate: d(2025, 11, 12)),
+            Reservation(id: UUID(), property: .washington, status: .blocked, renterFirstName: "Owner", renterLastName: "Hold", startDate: d(2026, 5, 10), endDate: d(2026, 5, 12)),
+            Reservation(id: UUID(), property: .barndo, status: .gift, renterFirstName: "Liam", renterLastName: "Walker", startDate: d(2026, 6, 3), endDate: d(2026, 6, 7)),
+            Reservation(id: UUID(), property: .main, status: .spam, renterFirstName: "Spam", renterLastName: "Request", startDate: d(2026, 1, 5), endDate: d(2026, 1, 6)),
+            Reservation(id: UUID(), property: .washington, status: .booked, renterFirstName: "Sophia", renterLastName: "Davis", startDate: d(2026, 7, 18), endDate: d(2026, 7, 21)),
+            Reservation(id: UUID(), property: .barndo, status: .completed, renterFirstName: "Olivia", renterLastName: "Martinez", startDate: d(2024, 10, 14), endDate: d(2024, 10, 18)),
+            Reservation(id: UUID(), property: .main, status: .inquired, renterFirstName: "Ethan", renterLastName: "Moore", startDate: d(2025, 3, 9), endDate: d(2025, 3, 12)),
+            Reservation(id: UUID(), property: .washington, status: .cancelled, renterFirstName: "Isabella", renterLastName: "Hall", startDate: d(2025, 8, 2), endDate: d(2025, 8, 4)),
+            Reservation(id: UUID(), property: .barndo, status: .blocked, renterFirstName: "Maintenance", renterLastName: "Block", startDate: d(2026, 9, 1), endDate: d(2026, 9, 3)),
+            Reservation(id: UUID(), property: .main, status: .gift, renterFirstName: "Charlotte", renterLastName: "Allen", startDate: d(2024, 12, 24), endDate: d(2024, 12, 27)),
+            Reservation(id: UUID(), property: .washington, status: .completed, renterFirstName: "James", renterLastName: "Young", startDate: d(2026, 11, 10), endDate: d(2026, 11, 12))
         ]
     }()
 
-    // MARK: - 3) Filters
+    // MARK: - 1.3 Filters
 
     /// Empty set == All
     @State private var selectedProperties: Set<Property> = []
@@ -81,15 +94,16 @@ struct BookingsView: View {
     /// Empty set == All
     @State private var selectedStatuses: Set<ReservationStatus> = []
 
-    // MARK: - 4) Selection + Sheets
+    // MARK: - 1.4 Selection + Sheets
 
     @State private var selectedReservationID: UUID? = nil
     @State private var draftReservation: Reservation? = nil
 
-    @State private var isShowingFilters: Bool = false
+    @State private var isShowingYearPicker: Bool = false
+    @State private var isShowingStatusPicker: Bool = false
     @State private var isShowingDetails: Bool = false
 
-    // MARK: - 5) Derived
+    // MARK: - 1.5 Derived
 
     private var availableYears: [Int] {
         let years = Set(allReservations.map { $0.year })
@@ -104,66 +118,134 @@ struct BookingsView: View {
             .sorted { $0.startDate > $1.startDate }
     }
 
-    // MARK: - 6) Body
+    private var yearsButtonSubtitle: String {
+        if selectedYears.isEmpty { return "All" }
+        if Set(selectedYears) == Set(availableYears) { return "All" }
+        return selectedYears.sorted(by: >).map(String.init).joined(separator: ", ")
+    }
+
+    private var statusesButtonSubtitle: String {
+        if selectedStatuses.isEmpty { return "All" }
+        if Set(selectedStatuses) == Set(ReservationStatus.allCases) { return "All" }
+        return selectedStatuses.map { $0.rawValue }.sorted().joined(separator: ", ")
+    }
+
+    // MARK: - 1.6 Body
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HStack {
-                        Text("Reservations")
-                        Spacer()
-                        Text("\(filteredReservations.count)")
-                            .foregroundStyle(.secondary)
-                        Button {
-                            isShowingFilters = true
-                        } label: {
-                            Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
-                                .labelStyle(.iconOnly)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+            VStack(spacing: 0) {
+                BookingsBrandedHeaderView(title: "Bookings")
 
-                if filteredReservations.isEmpty {
+                List {
+                    // 2) Filters
                     Section {
-                        Text("No reservations match the current filters.")
-                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 12) {
+                            // 2.1 Property chips
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Property")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+
+                                HStack(spacing: 10) {
+                                    filterChip(title: "Barndo", isSelected: isPropertySelected(.barndo)) { toggleProperty(.barndo) }
+                                    filterChip(title: "Main", isSelected: isPropertySelected(.main)) { toggleProperty(.main) }
+                                    filterChip(title: "Washington", isSelected: isPropertySelected(.washington)) { toggleProperty(.washington) }
+                                }
+                            }
+
+                            // 2.2 Years (multi-select)
+                            Button {
+                                isShowingYearPicker = true
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Years").font(.subheadline)
+                                        Text(yearsButtonSubtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+
+                            // 2.3 Statuses (multi-select)
+                            Button {
+                                isShowingStatusPicker = true
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Statuses").font(.subheadline)
+                                        Text(statusesButtonSubtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.vertical, 4)
+                    } header: {
+                        Text("Filters")
                     }
-                } else {
+
+                    // 3) Reservations
                     Section {
-                        ForEach(filteredReservations) { reservation in
-                            ReservationRowBasic(reservation: reservation)
+                        if filteredReservations.isEmpty {
+                            Text("No reservations match the current filters.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(filteredReservations) { reservation in
+                                ReservationRowBasic(
+                                    reservation: reservation,
+                                    isSelected: reservation.id == selectedReservationID
+                                )
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     selectReservation(reservation)
                                 }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Reservations")
+                            Spacer()
+                            Text("\(filteredReservations.count)")
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
+                .listStyle(.insetGrouped)
             }
-            .navigationTitle("Bookings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        isShowingFilters = true
-                    } label: {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                    }
-                }
-            }
-            .sheet(isPresented: $isShowingFilters) {
+            // Hide the system nav bar so only the branded header is shown.
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $isShowingYearPicker) {
                 NavigationStack {
-                    FiltersSheetBasic(
-                        selectedProperties: $selectedProperties,
+                    YearsPickerSheet(
                         selectedYears: $selectedYears,
-                        selectedStatuses: $selectedStatuses,
                         availableYears: availableYears
                     ) {
-                        isShowingFilters = false
+                        isShowingYearPicker = false
                     }
-                    .navigationTitle("Filters")
+                    .navigationTitle("Years")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+            .sheet(isPresented: $isShowingStatusPicker) {
+                NavigationStack {
+                    StatusesPickerSheet(selectedStatuses: $selectedStatuses) {
+                        isShowingStatusPicker = false
+                    }
+                    .navigationTitle("Statuses")
                     .navigationBarTitleDisplayMode(.inline)
                 }
             }
@@ -177,9 +259,7 @@ struct BookingsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Close") {
-                                    isShowingDetails = false
-                                }
+                                Button("Close") { isShowingDetails = false }
                             }
                         }
                     } else {
@@ -192,7 +272,53 @@ struct BookingsView: View {
         }
     }
 
-    // MARK: - 7) Actions
+    // MARK: - 1.7 Filter Helpers
+
+    private func isPropertySelected(_ p: Property) -> Bool {
+        selectedProperties.isEmpty ? true : selectedProperties.contains(p)
+    }
+
+    private func toggleProperty(_ p: Property) {
+        // Empty == All. First tap moves from All -> just that one.
+        if selectedProperties.isEmpty {
+            selectedProperties = [p]
+            return
+        }
+
+        if selectedProperties.contains(p) {
+            selectedProperties.remove(p)
+            // If user deselects everything, fall back to All.
+            if selectedProperties.isEmpty {
+                selectedProperties = []
+            }
+        } else {
+            selectedProperties.insert(p)
+        }
+    }
+
+    @ViewBuilder
+    private func filterChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(isSelected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(isSelected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.10), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Property \(title)"))
+        .accessibilityHint(Text(isSelected ? "Selected" : "Not selected"))
+    }
+
+    // MARK: - 1.8 Selection + Draft
 
     private func selectReservation(_ reservation: Reservation) {
         selectedReservationID = reservation.id
@@ -232,15 +358,20 @@ struct BookingsView: View {
     }
 }
 
-// MARK: - Basic UI Components (Theme-independent)
+// MARK: - 2) Basic UI Components (Theme-independent)
 
 private struct ReservationRowBasic: View {
     let reservation: BookingsView.Reservation
+    let isSelected: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(reservation.renterDisplayName)
-                .font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                Text(reservation.renterDisplayName)
+                    .font(.headline)
+
+                Spacer()
+            }
 
             Text(reservation.dateRangeDisplay)
                 .font(.subheadline)
@@ -262,84 +393,98 @@ private struct ReservationRowBasic: View {
             }
         }
         .padding(.vertical, 6)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.clear, lineWidth: 1)
+        )
     }
 }
 
-private struct FiltersSheetBasic: View {
+private struct YearsPickerSheet: View {
 
-    @Binding var selectedProperties: Set<BookingsView.Property>
     @Binding var selectedYears: Set<Int>
-    @Binding var selectedStatuses: Set<BookingsView.ReservationStatus>
-
     let availableYears: [Int]
     let onDone: () -> Void
 
     var body: some View {
+        let allYearsSet = Set(availableYears)
+        let isAllSelected = !availableYears.isEmpty && selectedYears == allYearsSet
         List {
-            Section("Properties") {
-                ForEach(BookingsView.Property.allCases) { property in
-                    Toggle(property.rawValue, isOn: Binding(
-                        get: { selectedProperties.isEmpty ? true : selectedProperties.contains(property) },
+            if availableYears.isEmpty {
+                Text("No years available")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(availableYears, id: \.self) { year in
+                    Toggle(String(year), isOn: Binding(
+                        get: { selectedYears.contains(year) },
                         set: { isOn in
                             if isOn {
-                                if selectedProperties.isEmpty {
-                                    selectedProperties = Set(BookingsView.Property.allCases)
-                                }
-                                selectedProperties.insert(property)
+                                selectedYears.insert(year)
                             } else {
-                                if selectedProperties.isEmpty {
-                                    selectedProperties = Set(BookingsView.Property.allCases)
-                                }
-                                selectedProperties.remove(property)
+                                selectedYears.remove(year)
                             }
                         }
                     ))
                 }
 
-                Button("Select All") { selectedProperties = [] }
-            }
-
-            Section("Years") {
-                if availableYears.isEmpty {
-                    Text("No years available")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(availableYears, id: \.self) { year in
-                        Toggle(String(year), isOn: Binding(
-                            get: { selectedYears.isEmpty ? true : selectedYears.contains(year) },
-                            set: { isOn in
-                                if isOn {
-                                    if selectedYears.isEmpty { selectedYears = Set(availableYears) }
-                                    selectedYears.insert(year)
-                                } else {
-                                    if selectedYears.isEmpty { selectedYears = Set(availableYears) }
-                                    selectedYears.remove(year)
-                                }
-                            }
-                        ))
+                Button(isAllSelected ? "Clear All" : "Select All") {
+                    if isAllSelected {
+                        // Clear filters (main view interprets empty as All)
+                        selectedYears = []
+                    } else {
+                        selectedYears = allYearsSet
                     }
-
-                    Button("Select All") { selectedYears = [] }
                 }
             }
+        }
+        .onAppear {
+            if selectedYears.isEmpty {
+                selectedYears = allYearsSet
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { onDone() }
+            }
+        }
+    }
+}
 
-            Section("Statuses") {
-                ForEach(BookingsView.ReservationStatus.allCases) { status in
-                    Toggle(status.rawValue, isOn: Binding(
-                        get: { selectedStatuses.isEmpty ? true : selectedStatuses.contains(status) },
-                        set: { isOn in
-                            if isOn {
-                                if selectedStatuses.isEmpty { selectedStatuses = Set(BookingsView.ReservationStatus.allCases) }
-                                selectedStatuses.insert(status)
-                            } else {
-                                if selectedStatuses.isEmpty { selectedStatuses = Set(BookingsView.ReservationStatus.allCases) }
-                                selectedStatuses.remove(status)
-                            }
+private struct StatusesPickerSheet: View {
+
+    @Binding var selectedStatuses: Set<BookingsView.ReservationStatus>
+    let onDone: () -> Void
+
+    var body: some View {
+        let allStatusesSet = Set(BookingsView.ReservationStatus.allCases)
+        let isAllSelected = selectedStatuses == allStatusesSet
+        List {
+            ForEach(BookingsView.ReservationStatus.allCases) { status in
+                Toggle(status.rawValue, isOn: Binding(
+                    get: { selectedStatuses.contains(status) },
+                    set: { isOn in
+                        if isOn {
+                            selectedStatuses.insert(status)
+                        } else {
+                            selectedStatuses.remove(status)
                         }
-                    ))
-                }
+                    }
+                ))
+            }
 
-                Button("Select All") { selectedStatuses = [] }
+            Button(isAllSelected ? "Clear All" : "Select All") {
+                if isAllSelected {
+                    // Clear filters (main view interprets empty as All)
+                    selectedStatuses = []
+                } else {
+                    selectedStatuses = allStatusesSet
+                }
+            }
+        }
+        .onAppear {
+            if selectedStatuses.isEmpty {
+                selectedStatuses = allStatusesSet
             }
         }
         .toolbar {
@@ -396,4 +541,38 @@ private struct ReservationEditorBasic: View {
 
 #Preview {
     BookingsView()
+}
+
+
+// MARK: - 3) Bookings branded header (tighter spacing)
+
+private struct BookingsBrandedHeaderView: View {
+    let title: String
+
+    var body: some View {
+        ZStack {
+            Theme.Colors.crimson
+                .ignoresSafeArea(edges: .top)
+
+            VStack(spacing: 2) {
+                // Brand lockup
+                Theme.WordmarkView(markColor: .white, titleColor: .white)
+                    // The wordmark view is inherently tall; pull the title closer.
+                    .padding(.top, 2)
+
+                Text(title)
+                    .font(Theme.Typography.title(.bold))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+                    .padding(.top, -6)
+                    .padding(.bottom, 2)
+            }
+            .padding(.horizontal, Theme.Spacing.m)
+        }
+        // Give enough height so the title never clips on small devices / dynamic type.
+        .frame(height: 96)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(title))
+    }
 }

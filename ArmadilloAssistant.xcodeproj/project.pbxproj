@@ -12,6 +12,7 @@
 		8A4BF1B92F5136E00084FE72 /* BookingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A4BF1B82F5136E00084FE72 /* BookingsView.swift */; };
 		8A4BF1BB2F5138920084FE72 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A4BF1BA2F5138920084FE72 /* Theme.swift */; };
 		8A6CC81D2F54BBD6003965C0 /* TestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CC81C2F54BBD6003965C0 /* TestView.swift */; };
+		8A6CC81F2F54DC6E003965C0 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CC81E2F54DC6E003965C0 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
 		8A4BF1B82F5136E00084FE72 /* BookingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookingsView.swift; sourceTree = "<group>"; };
 		8A4BF1BA2F5138920084FE72 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		8A6CC81C2F54BBD6003965C0 /* TestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestView.swift; sourceTree = "<group>"; };
+		8A6CC81E2F54DC6E003965C0 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -88,6 +90,7 @@
 				8A6CC81C2F54BBD6003965C0 /* TestView.swift */,
 				8A4BF1BA2F5138920084FE72 /* Theme.swift */,
 				8A4BF1A82F512AFA0084FE72 /* ContentView.swift */,
+				8A6CC81E2F54DC6E003965C0 /* SettingsView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -125,7 +128,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2620;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					8A4BF19D2F512AFA0084FE72 = {
 						CreatedOnToolsVersion = 26.2;
@@ -169,6 +172,7 @@
 				8A4BF1B92F5136E00084FE72 /* BookingsView.swift in Sources */,
 				8A4BF1B62F5133D80084FE72 /* Debug.swift in Sources */,
 				8A4BF1A92F512AFA0084FE72 /* ContentView.swift in Sources */,
+				8A6CC81F2F54DC6E003965C0 /* SettingsView.swift in Sources */,
 				8A4BF1BB2F5138920084FE72 /* Theme.swift in Sources */,
 				8A6CC81D2F54BBD6003965C0 /* TestView.swift in Sources */,
 			);
@@ -185,6 +189,7 @@
 				CODE_SIGN_ENTITLEMENTS = ArmadilloAssistant/ArmadilloAssistant.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = YVYV2ACPL4;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -233,6 +238,7 @@
 				CODE_SIGN_ENTITLEMENTS = ArmadilloAssistant/ArmadilloAssistant.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = YVYV2ACPL4;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -307,6 +313,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = YVYV2ACPL4;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -330,6 +337,7 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -369,6 +377,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = YVYV2ACPL4;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -385,6 +394,7 @@
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 			};
 			name = Release;
