@@ -22,125 +22,37 @@ struct ContentView: View {
         }
     }
 
-    @State private var selectedTab: Tab = .bookings
+    init() {
+        // Selected tab (active) = white
+        UITabBar.appearance().tintColor = UIColor.white
 
-    var body: some View {
-        ZStack {
-            Theme.MetallicBackground()
-
-            VStack(spacing: 0) {
-                // MARK: - 2) Active Screen
-                Group {
-                    switch selectedTab {
-                    case .expenses:
-                        PlaceholderScreen(title: "Expenses", subtitle: "Track expenses by property, category, and period.")
-                    case .bookings:
-                        NavigationStack {
-                            BookingsView()
-                        }
-                    case .narrative:
-                        PlaceholderScreen(title: "Narrative", subtitle: "Write notes, operational logs, and property narratives.")
-                    case .settings:
-                        PlaceholderScreen(title: "Settings", subtitle: "Partners, notifications, and app preferences.")
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // MARK: - 3) Tab Bar
-                TabBar(selectedTab: $selectedTab)
-            }
-        }
+        // Inactive tab = crimson
+        UITabBar.appearance().unselectedItemTintColor = UIColor(Theme.Colors.crimson)
     }
-}
-
-// MARK: - Tab Bar
-
-private struct TabBar: View {
-    @Binding var selectedTab: ContentView.Tab
 
     var body: some View {
-        HStack {
-            ForEach(ContentView.Tab.allCases) { tab in
-                Button {
-                    selectedTab = tab
-                } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: tab.systemImageName)
-                            .font(.system(size: 18, weight: .semibold))
-
-                        Text(tab.rawValue)
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .foregroundStyle(selectedTab == tab ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
+        TabView {
+            PlaceholderScreen(title: "Expenses", subtitle: "Track expenses by property, category, and period.")
+                .tabItem {
+                    Label("Expenses", systemImage: Tab.expenses.systemImageName)
                 }
-                .buttonStyle(.plain)
-            }
+
+            BookingsView()
+                .tabItem {
+                    Label("Bookings", systemImage: Tab.bookings.systemImageName)
+                }
+
+            PlaceholderScreen(title: "Narrative", subtitle: "Write notes, operational logs, and property narratives.")
+                .tabItem {
+                    Label("Narrative", systemImage: Tab.narrative.systemImageName)
+                }
+
+            PlaceholderScreen(title: "Settings", subtitle: "Partners, notifications, and app preferences.")
+                .tabItem {
+                    Label("Settings", systemImage: Tab.settings.systemImageName)
+                }
         }
-        .padding(.horizontal, Theme.Spacing.m)
-        .padding(.bottom, 10)
-        .background(
-            ZStack {
-                // Industrial red steel base (near full opacity, heavier contrast)
-                LinearGradient(
-                    stops: [
-                        .init(color: Theme.Colors.crimson.opacity(0.98), location: 0.00),
-                        .init(color: Theme.Colors.crimson.opacity(0.92), location: 0.20),
-                        .init(color: Theme.Colors.crimson.opacity(0.88), location: 0.72),
-                        .init(color: Theme.Colors.crimson.opacity(0.99), location: 1.00)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                // Sharper steel sheen (harder highlight)
-                LinearGradient(
-                    stops: [
-                        .init(color: .white.opacity(0.00), location: 0.00),
-                        .init(color: .white.opacity(0.28), location: 0.18),
-                        .init(color: .white.opacity(0.00), location: 0.36),
-                        .init(color: .white.opacity(0.20), location: 0.58),
-                        .init(color: .white.opacity(0.00), location: 1.00)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .rotationEffect(.degrees(-22))
-                .blendMode(.screen)
-
-                // Subtle brushed horizontal steel texture
-                LinearGradient(
-                    gradient: Gradient(stops: [
-                        .init(color: .white.opacity(0.00), location: 0.00),
-                        .init(color: .white.opacity(0.06), location: 0.50),
-                        .init(color: .white.opacity(0.00), location: 1.00)
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .scaleEffect(x: 1.0, y: 14.0, anchor: .center)
-                .opacity(0.75)
-                .blendMode(.overlay)
-
-                // Heavier bottom depth shadow
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.35),
-                        Color.clear
-                    ],
-                    startPoint: .bottom,
-                    endPoint: .top
-                )
-                .blendMode(.multiply)
-
-                // Stronger top separator
-                Rectangle()
-                    .frame(height: 1)
-                    .foregroundStyle(Theme.Colors.strokeStrong.opacity(0.95))
-                    .frame(maxHeight: .infinity, alignment: .top)
-            }
-        )
+        .tint(Theme.Colors.crimson)
     }
 }
 

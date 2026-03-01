@@ -13,13 +13,7 @@ enum Debug {
     private static let subsystem = Bundle.main.bundleIdentifier ?? "ArmadilloAssistant"
     private static let logger = Logger(subsystem: subsystem, category: "Debug")
 
-    // 3) Basic logging
-    static func log(_ message: String) {
-        guard enabled else { return }
-        logger.debug("\(message, privacy: .public)")
-    }
-
-    // 4) Convenience overload to reduce string interpolation noise at call sites
+    // 3) Convenience overload to reduce string interpolation noise at call sites
     static func log(_ message: @autoclosure @escaping () -> String) {
         guard enabled else { return }
         let evaluated = message()

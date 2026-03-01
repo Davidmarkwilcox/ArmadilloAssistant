@@ -11,6 +11,7 @@
 		8A4BF1B62F5133D80084FE72 /* Debug.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A4BF1B52F5133D80084FE72 /* Debug.swift */; };
 		8A4BF1B92F5136E00084FE72 /* BookingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A4BF1B82F5136E00084FE72 /* BookingsView.swift */; };
 		8A4BF1BB2F5138920084FE72 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A4BF1BA2F5138920084FE72 /* Theme.swift */; };
+		8A6CC81D2F54BBD6003965C0 /* TestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CC81C2F54BBD6003965C0 /* TestView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -19,6 +20,7 @@
 		8A4BF1B52F5133D80084FE72 /* Debug.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug.swift; sourceTree = "<group>"; };
 		8A4BF1B82F5136E00084FE72 /* BookingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookingsView.swift; sourceTree = "<group>"; };
 		8A4BF1BA2F5138920084FE72 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		8A6CC81C2F54BBD6003965C0 /* TestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -83,6 +85,7 @@
 			isa = PBXGroup;
 			children = (
 				8A4BF1B82F5136E00084FE72 /* BookingsView.swift */,
+				8A6CC81C2F54BBD6003965C0 /* TestView.swift */,
 				8A4BF1BA2F5138920084FE72 /* Theme.swift */,
 				8A4BF1A82F512AFA0084FE72 /* ContentView.swift */,
 			);
@@ -167,6 +170,7 @@
 				8A4BF1B62F5133D80084FE72 /* Debug.swift in Sources */,
 				8A4BF1A92F512AFA0084FE72 /* ContentView.swift in Sources */,
 				8A4BF1BB2F5138920084FE72 /* Theme.swift in Sources */,
+				8A6CC81D2F54BBD6003965C0 /* TestView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -186,8 +190,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = ArmadilloAssistant/Info.plist;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "";
 				INFOPLIST_KEY_CFBundleDisplayName = "Armadillo Assistant";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -234,8 +238,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = ArmadilloAssistant/Info.plist;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "";
 				INFOPLIST_KEY_CFBundleDisplayName = "Armadillo Assistant";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
