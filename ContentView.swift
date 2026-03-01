@@ -42,9 +42,9 @@ struct ContentView: View {
                     Label("Bookings", systemImage: Tab.bookings.systemImageName)
                 }
 
-            PlaceholderScreen(title: "Narrative", subtitle: "Write notes, operational logs, and property narratives.")
+            NarrativeView()
                 .tabItem {
-                    Label("Narrative", systemImage: Tab.narrative.systemImageName)
+                    Label("Narrative", systemImage: Tab.bookings.systemImageName)
                 }
 
             SettingsView()
