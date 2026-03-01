@@ -32,9 +32,9 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            PlaceholderScreen(title: "Expenses", subtitle: "Track expenses by property, category, and period.")
+            ExpensesView()
                 .tabItem {
-                    Label("Expenses", systemImage: Tab.expenses.systemImageName)
+                    Label("Expenses", systemImage: Tab.bookings.systemImageName)
                 }
 
             BookingsView()
