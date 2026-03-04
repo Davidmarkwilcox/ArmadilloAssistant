@@ -51,7 +51,9 @@ struct ExpensesView: View {
     @State private var selectedExpensers: Set<Expenser> = []
 
     @State private var isShowingExpenserPicker: Bool = false
-    @State private var selectedExpense: ExpenseItem?
+    @State private var selectedExpenseID: UUID?
+    @State private var draftExpense: ExpenseItem?
+    @State private var isShowingDetails: Bool = false
 
     // MARK: - 1.3 Placeholder Data
 
@@ -192,42 +194,14 @@ struct ExpensesView: View {
                     // MARK: - 3) Expenses List
                     Section {
                         ForEach(filteredExpenses) { expense in
-                            Button {
-                                selectedExpense = expense
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("\(expense.property) • \(expense.category)")
-                                            .font(.subheadline)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-
-                                        Text("\(formatDate(expense.date)) • \(expense.description)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-
-                                        Text("Expenser: \(expense.expenser.rawValue)\(expense.isReimbursed ? " • Reimbursed" : "")")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                    }
-
-                                    Spacer()
-
-                                    VStack(alignment: .trailing, spacing: 4) {
-                                        Text(formatCurrency(expense.amount))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.primary)
-
-                                        Image(systemName: "chevron.right")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .padding(.vertical, 4)
+                            ExpenseRowBasic(
+                                expense: expense,
+                                isSelected: expense.id == selectedExpenseID
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectExpense(expense)
                             }
-                            .buttonStyle(.plain)
                             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                         }
                     } header: {
@@ -251,10 +225,32 @@ struct ExpensesView: View {
                     .navigationBarTitleDisplayMode(.inline)
                 }
             }
-            .sheet(item: $selectedExpense) { expense in
-                ExpenseDetailView(expense: expense)
+            .sheet(isPresented: $isShowingDetails) {
+                NavigationStack {
+                    if let expense = draftExpense {
+                        ExpenseDetailView(expense: expense)
+                            .navigationTitle("Expense")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button("Close") { isShowingDetails = false }
+                                }
+                            }
+                    } else {
+                        Text("No expense selected.")
+                            .foregroundStyle(.secondary)
+                            .padding()
+                    }
+                }
             }
         }
+    }
+    // MARK: - 1.6.1 Selection
+
+    private func selectExpense(_ expense: ExpenseItem) {
+        selectedExpenseID = expense.id
+        draftExpense = expense
+        isShowingDetails = true
     }
 
     // MARK: - 1.7 Formatting
@@ -274,6 +270,65 @@ struct ExpensesView: View {
     }
 }
 
+// MARK: - 1.8 Expense Row (Bookings-style)
+
+private struct ExpenseRowBasic: View {
+    let expense: ExpensesView.ExpenseItem
+    let isSelected: Bool
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(expense.property) • \(expense.category)")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text("\(formatDate(expense.date)) • \(expense.description)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                Text("Expenser: \(expense.expenser.rawValue)\(expense.isReimbursed ? " • Reimbursed" : "")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(formatCurrency(expense.amount))
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 6)
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.14) : Color.clear)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.clear, lineWidth: 1)
+        )
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
+
+    private func formatCurrency(_ amount: Decimal) -> String {
+        let number = NSDecimalNumber(decimal: amount)
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        return formatter.string(from: number) ?? "$0.00"
+    }
+}
 
 // MARK: - 2) Expense Detail Pop-out
 
@@ -281,32 +336,28 @@ private struct ExpenseDetailView: View {
     let expense: ExpensesView.ExpenseItem
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    LabeledContent("Property", value: expense.property)
-                    LabeledContent("Category", value: expense.category)
-                    LabeledContent("Date", value: formatDate(expense.date))
-                    LabeledContent("Expenser", value: expense.expenser.rawValue)
-                    LabeledContent("Reimbursed", value: expense.isReimbursed ? "Yes" : "No")
-                }
-
-                Section("Description") {
-                    Text(expense.description)
-                        .foregroundStyle(.primary)
-                }
-
-                Section {
-                    LabeledContent("Amount", value: formatCurrency(expense.amount))
-                }
+        List {
+            Section {
+                LabeledContent("Property", value: expense.property)
+                LabeledContent("Category", value: expense.category)
+                LabeledContent("Date", value: formatDate(expense.date))
+                LabeledContent("Expenser", value: expense.expenser.rawValue)
+                LabeledContent("Reimbursed", value: expense.isReimbursed ? "Yes" : "No")
             }
-            .navigationTitle("Expense")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ShareLink(item: shareText(for: expense)) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
+
+            Section("Description") {
+                Text(expense.description)
+                    .foregroundStyle(.primary)
+            }
+
+            Section {
+                LabeledContent("Amount", value: formatCurrency(expense.amount))
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                ShareLink(item: shareText(for: expense)) {
+                    Image(systemName: "square.and.arrow.up")
                 }
             }
         }
