@@ -13,6 +13,7 @@
 import SwiftUI
 import PhotosUI
 import UIKit
+import CloudKit
 
 struct SettingsView: View {
 
@@ -91,6 +92,11 @@ private struct ProfileSettingsView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    // MARK: - 3A) CloudKit User Identity
+    @State private var cloudKitStatusText: String = "Checking iCloud account…"
+    @State private var cloudKitRecordName: String = ""
+    @State private var isLoadingCloudKitIdentity: Bool = false
+
     // MARK: - 3) Computed
     private var hasUnsavedChanges: Bool {
         guard isInitialized else { return false }
@@ -147,9 +153,125 @@ private struct ProfileSettingsView: View {
         }
     }
 
+    private func loadCloudKitIdentity() {
+        guard !isLoadingCloudKitIdentity else { return }
+        isLoadingCloudKitIdentity = true
+        cloudKitStatusText = "Checking iCloud account…"
+
+        let container = CKContainer(identifier: "iCloud.com.DavidMWilcox.ArmadilloAssistant")
+        container.accountStatus { status, error in
+            if let error {
+                DispatchQueue.main.async {
+                    cloudKitStatusText = "Unable to verify iCloud account"
+                    cloudKitRecordName = ""
+                    isLoadingCloudKitIdentity = false
+                    print("[ProfileSettingsView] CloudKit account status error: \(error.localizedDescription)")
+                }
+                return
+            }
+
+            switch status {
+            case .available:
+                container.fetchUserRecordID { recordID, recordError in
+                    DispatchQueue.main.async {
+                        if let recordError {
+                            cloudKitStatusText = "Signed into iCloud, but user ID could not be fetched"
+                            cloudKitRecordName = ""
+                            print("[ProfileSettingsView] CloudKit user record fetch error: \(recordError.localizedDescription)")
+                        } else if let recordID {
+                            cloudKitStatusText = "Signed in with iCloud"
+                            cloudKitRecordName = recordID.recordName
+                        } else {
+                            cloudKitStatusText = "Signed into iCloud, but no user ID was returned"
+                            cloudKitRecordName = ""
+                        }
+                        isLoadingCloudKitIdentity = false
+                    }
+                }
+
+            case .noAccount:
+                DispatchQueue.main.async {
+                    cloudKitStatusText = "No iCloud account is signed in on this device"
+                    cloudKitRecordName = ""
+                    isLoadingCloudKitIdentity = false
+                }
+
+            case .restricted:
+                DispatchQueue.main.async {
+                    cloudKitStatusText = "iCloud account access is restricted on this device"
+                    cloudKitRecordName = ""
+                    isLoadingCloudKitIdentity = false
+                }
+
+            case .couldNotDetermine:
+                DispatchQueue.main.async {
+                    cloudKitStatusText = "Unable to determine iCloud account status"
+                    cloudKitRecordName = ""
+                    isLoadingCloudKitIdentity = false
+                }
+
+            case .temporarilyUnavailable:
+                DispatchQueue.main.async {
+                    cloudKitStatusText = "iCloud is temporarily unavailable"
+                    cloudKitRecordName = ""
+                    isLoadingCloudKitIdentity = false
+                }
+
+            @unknown default:
+                DispatchQueue.main.async {
+                    cloudKitStatusText = "Unknown iCloud account status"
+                    cloudKitRecordName = ""
+                    isLoadingCloudKitIdentity = false
+                }
+            }
+        }
+    }
+
     // MARK: - 5) View
     var body: some View {
         List {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Friendly identity shown to the user
+                    let displayName = [storedFirstName, storedLastName]
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " ")
+
+                    if !displayName.isEmpty {
+                        Text("Signed in as: \(displayName)")
+                    } else {
+                        Text(cloudKitStatusText)
+                    }
+
+                    // Technical identity for attribution/debug
+                    if !cloudKitRecordName.isEmpty {
+                        DisclosureGroup("Advanced") {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("CloudKit User ID")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                Text(cloudKitRecordName)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+
+                    Button {
+                        loadCloudKitIdentity()
+                    } label: {
+                        Label("Refresh iCloud Status", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(isLoadingCloudKitIdentity)
+                }
+            } header: {
+                Text("Signed In")
+            } footer: {
+                Text("Your display name comes from your profile fields. The CloudKit User ID is an internal identifier used for attribution and synchronization.")
+            }
             Section {
                 TextField("First Name", text: $firstName)
                     .textContentType(.givenName)
@@ -256,6 +378,7 @@ private struct ProfileSettingsView: View {
         }
         .onAppear {
             loadFromStorageIfNeeded()
+            loadCloudKitIdentity()
         }
         .task(id: profilePhotoItem?.itemIdentifier) {
             guard let item = profilePhotoItem else { return }

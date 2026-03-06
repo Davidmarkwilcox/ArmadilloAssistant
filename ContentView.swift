@@ -3,6 +3,10 @@ import SwiftUI
 // Custom tab-based root navigation (no NavigationStack) to avoid opaque container backgrounds.
 struct ContentView: View {
 
+    // MARK: - 0) App Lock
+    // Use a StateObject so the view updates when `isLocked` changes.
+    @StateObject private var appLock = AppLockManager.shared
+
     // MARK: - 1) Tabs
     enum Tab: String, CaseIterable, Identifiable {
         case expenses = "Expenses"
@@ -31,28 +35,56 @@ struct ContentView: View {
     }
 
     var body: some View {
-        TabView {
-            ExpensesView()
-                .tabItem {
-                    Label("Expenses", systemImage: Tab.bookings.systemImageName)
-                }
+        ZStack {
+            TabView {
+                ExpensesView()
+                    .tabItem {
+                        Label("Expenses", systemImage: Tab.bookings.systemImageName)
+                    }
 
-            BookingsView()
-                .tabItem {
-                    Label("Bookings", systemImage: Tab.bookings.systemImageName)
-                }
+                BookingsView()
+                    .tabItem {
+                        Label("Bookings", systemImage: Tab.bookings.systemImageName)
+                    }
 
-            NarrativeView()
-                .tabItem {
-                    Label("Narrative", systemImage: Tab.bookings.systemImageName)
-                }
+                NarrativeView()
+                    .tabItem {
+                        Label("Narrative", systemImage: Tab.bookings.systemImageName)
+                    }
 
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: Tab.settings.systemImageName)
+                SettingsView()
+                    .tabItem {
+                        Label("Settings", systemImage: Tab.settings.systemImageName)
+                    }
+            }
+            .tint(Theme.Colors.crimson)
+
+            // App Lock Overlay
+            if appLock.isLocked {
+                VStack(spacing: Theme.Spacing.l) {
+
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 48))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+
+                    Text("Unlock Armadillo Assistant")
+                        .font(Theme.Typography.headline())
+                        .foregroundStyle(Theme.Colors.textPrimary)
+
+                    Button("Unlock") {
+                        appLock.authenticate()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .onAppear {
+                        // Auto-prompt on lock screen appearance (Face ID first, passcode fallback).
+                        appLock.authenticate()
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.9))
+                .ignoresSafeArea()
+            }
         }
-        .tint(Theme.Colors.crimson)
     }
 }
 

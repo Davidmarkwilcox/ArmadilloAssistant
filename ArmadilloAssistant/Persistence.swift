@@ -39,7 +39,7 @@ struct PersistenceController {
             storeDescription?.cloudKitContainerOptions = nil
         } else {
             storeDescription?.cloudKitContainerOptions =
-                NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.DavidMWilcox.ArmadilloAssistant")
+                NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.DavidMWilcox.ArmadilloAssistant")
         }
         if inMemory {
             container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
