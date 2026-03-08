@@ -2,10 +2,10 @@
 //  SettingsView.swift
 //  ArmadilloAssistant
 //
-//  Settings hub screen.
-//  - Presents top-level navigation into Settings subsections (Profile / Property / Data Management).
-//  - Each destination is a lightweight placeholder view for now; we can expand each section later.
-//  - This view is intended to remain stable as a "Settings root" while subsections evolve.
+//  File: SettingsView.swift
+//  Description: Settings hub screen and settings subsections for profile, property, team sharing,
+//  and data management. This file also hosts the Team sharing UI and the UIKit wrapper used to
+//  present Apple’s Cloud sharing controller for the shared workspace.
 //
 //  Created by David Wilcox on 3/1/26.
 //
@@ -46,6 +46,12 @@ struct SettingsView: View {
                         }
 
                         NavigationLink {
+                            TeamSettingsView()
+                        } label: {
+                            Label("Team", systemImage: "person.3")
+                        }
+
+                        NavigationLink {
                             DataManagementSettingsView()
                         } label: {
                             Label("Data Management", systemImage: "tray.2")
@@ -56,7 +62,6 @@ struct SettingsView: View {
                 }
                 .listStyle(.insetGrouped)
             }
-            // We use the branded header instead of the nav bar title.
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
@@ -66,7 +71,331 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - 3) Destination Screens (Placeholders)
+// MARK: - 3) Destination Screens
+
+private struct TeamSettingsView: View {
+
+    struct TeamMember: Identifiable {
+        let id = UUID()
+        var name: String
+        var email: String
+        var title: String
+        var status: String   // "Owner", "Active", or "Invited"
+        var cloudKitUserID: String
+        var canResendInvite: Bool
+        var canRecallInvite: Bool
+        var canRemoveAccess: Bool
+        var isOwnerRow: Bool
+    }
+
+    @State private var members: [TeamMember] = []
+    @State private var inviteStatusMessage: String = "Prepare the workspace to enable invitations"
+    @State private var pendingInviteLink: String = ""
+    @State private var shareSheetStatusMessage: String = "Prepare the workspace to enable invite presentation"
+    @State private var isShowingCloudSharingController: Bool = false
+    @State private var shareToPresent: CKShare?
+    @StateObject private var sharingManager = CloudKitSharingManager.shared
+
+    private func seedOwnerRowIfNeeded() {
+        guard !members.contains(where: { $0.isOwnerRow }) else { return }
+
+        let ownerSeed = sharingManager.ownerTeamMemberSeed()
+        members.insert(
+            TeamMember(
+                name: ownerSeed.displayName,
+                email: ownerSeed.displayName,
+                title: ownerSeed.title,
+                status: ownerSeed.status,
+                cloudKitUserID: ownerSeed.cloudKitUserID,
+                canResendInvite: false,
+                canRecallInvite: false,
+                canRemoveAccess: false,
+                isOwnerRow: true
+            ),
+            at: 0
+        )
+    }
+
+    private func manageTeamSharing() {
+        if sharingManager.activeWorkspaceRecordID != nil && sharingManager.activeShare == nil {
+            shareSheetStatusMessage = "Workspace is ready. Opening sharing controller…"
+            inviteStatusMessage = "Workspace is ready. Opening sharing controller…"
+            shareToPresent = nil
+            isShowingCloudSharingController = true
+            return
+        }
+
+        inviteStatusMessage = "Preparing sharing controller…"
+
+        sharingManager.prepareShareSheetPresentation { result in
+            switch result {
+            case .success(let share):
+                DispatchQueue.main.async {
+                    shareSheetStatusMessage = "Workspace share is ready. Opening sharing controller…"
+                    inviteStatusMessage = "Workspace share is ready. Opening sharing controller…"
+                    pendingInviteLink = share.url?.absoluteString ?? "Cloud sharing controller ready"
+                    shareToPresent = share
+                    isShowingCloudSharingController = true
+                }
+
+            case .failure:
+                DispatchQueue.main.async {
+                    if sharingManager.activeWorkspaceRecordID != nil {
+                        shareSheetStatusMessage = "Workspace is ready. Opening sharing controller…"
+                        inviteStatusMessage = "Workspace is ready. Opening sharing controller…"
+                        shareToPresent = nil
+                        isShowingCloudSharingController = true
+                    } else {
+                        pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? pendingInviteLink
+                        shareSheetStatusMessage = "Unable to prepare sharing controller."
+                        inviteStatusMessage = "Unable to prepare team sharing."
+                    }
+                }
+            }
+        }
+    }
+
+    private func resendInvite(for memberID: UUID) {
+        guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
+        guard members[index].status == "Invited" else { return }
+
+        let targetEmail = members[index].email
+
+        if sharingManager.activeWorkspaceRecordID != nil && sharingManager.activeShare == nil {
+            shareSheetStatusMessage = "Workspace is ready. Opening sharing controller to re-invite \(targetEmail)…"
+            inviteStatusMessage = "Workspace is ready. Opening sharing controller to re-invite \(targetEmail)…"
+            shareToPresent = nil
+            isShowingCloudSharingController = true
+            return
+        }
+
+        inviteStatusMessage = "Preparing sharing controller for \(targetEmail)…"
+
+        sharingManager.prepareShareSheetPresentation { result in
+            switch result {
+            case .success(let share):
+                DispatchQueue.main.async {
+                    shareSheetStatusMessage = "Workspace share is ready. Opening sharing controller to re-invite \(targetEmail)…"
+                    inviteStatusMessage = "Workspace share is ready. Opening sharing controller to re-invite \(targetEmail)…"
+                    pendingInviteLink = share.url?.absoluteString ?? "Cloud sharing controller ready"
+                    shareToPresent = share
+                    isShowingCloudSharingController = true
+                }
+
+            case .failure:
+                DispatchQueue.main.async {
+                    if sharingManager.activeWorkspaceRecordID != nil {
+                        shareSheetStatusMessage = "Workspace is ready. Opening sharing controller to re-invite \(targetEmail)…"
+                        inviteStatusMessage = "Workspace is ready. Opening sharing controller to re-invite \(targetEmail)…"
+                        shareToPresent = nil
+                        isShowingCloudSharingController = true
+                    } else {
+                        pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? pendingInviteLink
+                        shareSheetStatusMessage = "Unable to prepare sharing controller."
+                        inviteStatusMessage = "Unable to refresh invitation."
+                    }
+                }
+            }
+        }
+    }
+
+    private func recallInvite(for memberID: UUID) {
+        guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
+        guard members[index].status == "Invited" else { return }
+
+        // Placeholder only. Later this will remove the pending CloudKit participant/share invitation.
+        members.remove(at: index)
+    }
+
+    private func removeAccess(for memberID: UUID) {
+        guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
+        guard members[index].status == "Active", !members[index].isOwnerRow else { return }
+
+        // Placeholder only. Later this will remove the accepted CloudKit participant from the share.
+        members.remove(at: index)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(sharingManager.shareStatusText)
+
+                    if let shareURL = sharingManager.activeShareURL {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Share Link")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Text(shareURL.absoluteString)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    if !sharingManager.lastErrorMessage.isEmpty {
+                        if sharingManager.activeShareRecordID != nil {
+                            Text("Workspace share exists, but the invitation link is not available yet. Refresh workspace status and try again.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(sharingManager.lastErrorMessage)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+
+                    Text(sharingManager.inviteStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if !shareSheetStatusMessage.isEmpty {
+                        Text(shareSheetStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button {
+                        sharingManager.createWorkspaceIfNeeded()
+                    } label: {
+                        Label("Prepare Team Workspace", systemImage: "person.3.sequence")
+                    }
+                    .disabled(sharingManager.isLoading)
+
+                    Button {
+                        sharingManager.refreshShareStatus()
+                    } label: {
+                        Label("Refresh Workspace Status", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(sharingManager.isLoading)
+
+                }
+            } header: {
+                Text("Workspace")
+            } footer: {
+                Text("Prepare the shared team workspace before managing participants. Once prepared, use Manage Team Sharing to open Apple’s sharing controller.")
+            }
+
+            Section {
+                if !inviteStatusMessage.isEmpty {
+                    Text(inviteStatusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !pendingInviteLink.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Share Status")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text(pendingInviteLink)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                    }
+                }
+
+                Button {
+                    manageTeamSharing()
+                } label: {
+                    Label("Manage Team Sharing", systemImage: "person.badge.key")
+                }
+
+            } header: {
+                Text("Team Sharing")
+            } footer: {
+                Text("Use Manage Team Sharing to open Apple’s sharing controller and add or manage participants for the shared workspace.")
+            }
+
+            Section {
+                if members.isEmpty {
+                    Text("No team members yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach($members) { $member in
+                        VStack(alignment: .leading, spacing: 8) {
+
+                            Text(member.isOwnerRow ? member.name : member.email)
+                                .font(.headline)
+
+                            HStack {
+                                Text("Status:")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                Text(member.status)
+                                    .font(.caption)
+                            }
+
+                            if member.isOwnerRow {
+                                Text("Workspace Owner")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if !member.cloudKitUserID.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("CloudKit User ID")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    Text(member.cloudKitUserID)
+                                        .font(.caption.monospaced())
+                                        .textSelection(.enabled)
+                                }
+                            }
+
+                            TextField("Title (Manager, Owner, Cleaner, etc.)", text: $member.title)
+                                .textInputAutocapitalization(.words)
+
+                            HStack(spacing: 12) {
+                                if member.canResendInvite {
+                                    Button("Resend") {
+                                        resendInvite(for: member.id)
+                                    }
+                                    .font(.caption)
+                                }
+
+                                if member.canRecallInvite {
+                                    Button("Recall", role: .destructive) {
+                                        recallInvite(for: member.id)
+                                    }
+                                    .font(.caption)
+                                }
+
+                                if member.canRemoveAccess {
+                                    Button("Remove Access", role: .destructive) {
+                                        removeAccess(for: member.id)
+                                    }
+                                    .font(.caption)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            } header: {
+                Text("Team Members")
+            } footer: {
+                Text("The workspace owner is included automatically. Titles are informational and help identify responsibilities within the team. Invited members can be re-invited or recalled; active members can have access removed. A CloudKit User ID will be stored once a participant accepts and is linked to the shared workspace.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Team")
+        .onAppear {
+            sharingManager.refreshShareStatus()
+            seedOwnerRowIfNeeded()
+            inviteStatusMessage = sharingManager.inviteStatusText
+            shareSheetStatusMessage = sharingManager.canPresentShareSheet
+                ? "Workspace share is ready for Apple share sheet presentation."
+                : "Prepare the workspace to enable invite presentation"
+            pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? ""
+        }
+        .sheet(isPresented: $isShowingCloudSharingController) {
+            CloudSharingControllerSheet(share: shareToPresent)
+        }
+    }
+}
 
 private struct ProfileSettingsView: View {
 
@@ -133,7 +462,6 @@ private struct ProfileSettingsView: View {
             storedProfilePhotoBase64 = ""
         }
 
-        // Re-sync local editing state to the persisted values (keeps dirty-tracking accurate)
         firstName = storedFirstName
         lastName = storedLastName
         email = storedEmail
@@ -158,7 +486,7 @@ private struct ProfileSettingsView: View {
         isLoadingCloudKitIdentity = true
         cloudKitStatusText = "Checking iCloud account…"
 
-        let container = CKContainer(identifier: "iCloud.com.DavidMWilcox.ArmadilloAssistant")
+        let container = CKContainer(identifier: "DavidMWilcox.ArmadilloAssistant")
         container.accountStatus { status, error in
             if let error {
                 DispatchQueue.main.async {
@@ -232,7 +560,6 @@ private struct ProfileSettingsView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    // Friendly identity shown to the user
                     let displayName = [storedFirstName, storedLastName]
                         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                         .filter { !$0.isEmpty }
@@ -244,7 +571,6 @@ private struct ProfileSettingsView: View {
                         Text(cloudKitStatusText)
                     }
 
-                    // Technical identity for attribution/debug
                     if !cloudKitRecordName.isEmpty {
                         DisclosureGroup("Advanced") {
                             VStack(alignment: .leading, spacing: 4) {
@@ -272,6 +598,7 @@ private struct ProfileSettingsView: View {
             } footer: {
                 Text("Your display name comes from your profile fields. The CloudKit User ID is an internal identifier used for attribution and synchronization.")
             }
+
             Section {
                 TextField("First Name", text: $firstName)
                     .textContentType(.givenName)
@@ -335,7 +662,6 @@ private struct ProfileSettingsView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Profile")
-        // Hide the default back button so we can intercept navigation-away attempts.
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -360,7 +686,6 @@ private struct ProfileSettingsView: View {
                 dismiss()
             }
             Button("Discard Changes", role: .destructive) {
-                // Revert edits
                 firstName = storedFirstName
                 lastName = storedLastName
                 email = storedEmail
@@ -392,8 +717,6 @@ private struct ProfileSettingsView: View {
 private struct PropertySettingsView: View {
 
     // MARK: - 1) Persistence (placeholder)
-    // NOTE: Property data will ultimately be shared among all users via CloudKit.
-    // For the prototype, we store locally so the UI is testable end-to-end.
     @AppStorage("property_name") private var storedPropertyName: String = ""
     @AppStorage("property_shortName") private var storedPropertyShortName: String = ""
     @AppStorage("property_address") private var storedPropertyAddress: String = ""
@@ -402,7 +725,6 @@ private struct PropertySettingsView: View {
     @AppStorage("property_cleaningPayment") private var storedCleaningPayment: Double = 0
     @AppStorage("property_taxRatePercent") private var storedTaxRatePercent: Double = 0
 
-    // Store calendar color as hex for easy persistence
     @AppStorage("property_calendarColorHex") private var storedCalendarColorHex: String = "#B31B1B"
 
     // MARK: - 2) Editing state
@@ -416,7 +738,6 @@ private struct PropertySettingsView: View {
 
     @State private var calendarColor: Color = .red
 
-    // Photos are NOT persisted yet (placeholder). We’ll move these to CloudKit-backed assets later.
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var photos: [PropertyPhoto] = []
     @State private var defaultPhotoID: UUID? = nil
@@ -483,7 +804,6 @@ private struct PropertySettingsView: View {
 
         storedCalendarColorHex = calendarColor.toHexString()
 
-        // Re-sync local editing state to persisted values
         propertyName = storedPropertyName
         propertyShortName = storedPropertyShortName
         address = storedPropertyAddress
@@ -515,8 +835,6 @@ private struct PropertySettingsView: View {
     }
 
     private func loadSelectedPhotos() async {
-        // Convert newly selected items to Data.
-        // Note: We append; we don’t dedupe yet (prototype).
         var newPhotos: [PropertyPhoto] = []
 
         for item in selectedPhotoItems {
@@ -532,7 +850,6 @@ private struct PropertySettingsView: View {
             }
         }
 
-        // Clear picker state to avoid re-processing
         selectedPhotoItems = []
     }
 
@@ -708,7 +1025,6 @@ private struct PropertySettingsView: View {
                 dismiss()
             }
             Button("Discard Changes", role: .destructive) {
-                // Revert edits (photos remain in-memory; not persisted yet)
                 propertyName = storedPropertyName
                 propertyShortName = storedPropertyShortName
                 address = storedPropertyAddress
@@ -763,6 +1079,182 @@ private struct DataManagementSettingsView: View {
     }
 }
 
+private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
+    let share: CKShare?
+    private let debugEnabled: Bool = true
+
+    private func debugLog(_ message: String) {
+        guard debugEnabled else { return }
+        print("[CloudSharingControllerSheet] \(message)")
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(debugEnabled: debugEnabled)
+    }
+
+    func makeUIViewController(context: Context) -> HostViewController {
+        debugLog("makeUIViewController called")
+        let controller = HostViewController()
+        controller.debugEnabled = debugEnabled
+        controller.coordinator = context.coordinator
+        controller.share = share
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: HostViewController, context: Context) {
+        debugLog("updateUIViewController called")
+        uiViewController.debugEnabled = debugEnabled
+        uiViewController.coordinator = context.coordinator
+        uiViewController.share = share
+    }
+
+    final class Coordinator: NSObject, UICloudSharingControllerDelegate, UIAdaptivePresentationControllerDelegate {
+        private let debugEnabled: Bool
+
+        init(debugEnabled: Bool) {
+            self.debugEnabled = debugEnabled
+        }
+
+        func debugLog(_ message: String) {
+            guard debugEnabled else { return }
+            print("[CloudSharingControllerSheet] \(message)")
+        }
+
+        func itemTitle(for csc: UICloudSharingController) -> String? {
+            debugLog("itemTitle requested")
+            return "Armadillo Assistant Team"
+        }
+
+        func itemThumbnailData(for csc: UICloudSharingController) -> Data? {
+            debugLog("itemThumbnailData requested")
+            return nil
+        }
+
+        func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {
+            debugLog("Failed to save share: \(error.localizedDescription)")
+        }
+
+        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {
+            debugLog("Share saved successfully")
+        }
+
+        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
+            debugLog("Sharing stopped")
+        }
+
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            debugLog("Sharing controller dismissed")
+        }
+    }
+
+    final class HostViewController: UIViewController {
+        var debugEnabled: Bool = true
+        weak var coordinator: Coordinator?
+        var share: CKShare?
+        private var hasPresentedSharingController = false
+
+        private func debugLog(_ message: String) {
+            guard debugEnabled else { return }
+            print("[CloudSharingControllerSheet] \(message)")
+        }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .systemBackground
+            debugLog("Host view did load")
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            debugLog("Host view did appear")
+            presentSharingControllerIfNeeded()
+        }
+
+        private func presentSharingControllerIfNeeded() {
+            guard !hasPresentedSharingController else {
+                debugLog("Host view already presented sharing controller")
+                return
+            }
+            guard presentedViewController == nil else {
+                debugLog("Host view already has a presented view controller")
+                return
+            }
+            guard let coordinator else {
+                debugLog("Host view missing coordinator")
+                return
+            }
+
+            hasPresentedSharingController = true
+            let container = CKContainer(identifier: CloudKitSharingManager.containerIdentifier)
+            let sharingController: UICloudSharingController
+
+            if let share {
+                debugLog("Presenting sharing controller for existing share \(share.recordID.recordName)")
+                sharingController = UICloudSharingController(share: share, container: container)
+            } else {
+                debugLog("Presenting sharing controller with preparation handler")
+                sharingController = UICloudSharingController { _, preparationCompletionHandler in
+                    print("[CloudSharingControllerSheet] Preparation handler entered")
+                    let zoneID = CKRecordZone.ID(zoneName: "TeamWorkspaceZone", ownerName: CKCurrentUserDefaultName)
+                    let workspaceID = CKRecord.ID(recordName: "primary-workspace", zoneID: zoneID)
+                    let container = CKContainer(identifier: CloudKitSharingManager.containerIdentifier)
+                    let privateDatabase = container.privateCloudDatabase
+                    print("[CloudSharingControllerSheet] Preparation handler using workspace ID: \(workspaceID.recordName) in zone \(zoneID.zoneName)")
+                    print("[CloudSharingControllerSheet] Preparation handler fetching workspace record from CloudKit")
+
+                    privateDatabase.fetch(withRecordID: workspaceID) { record, error in
+                        if let error {
+                            DispatchQueue.main.async {
+                                print("[CloudSharingControllerSheet] Preparation fetch failed: \(error.localizedDescription)")
+                                preparationCompletionHandler(nil, container, error)
+                            }
+                            return
+                        }
+
+                        guard let workspaceRecord = record else {
+                            let error = NSError(
+                                domain: "CloudSharingControllerSheet",
+                                code: -100,
+                                userInfo: [NSLocalizedDescriptionKey: "Workspace record was not found during share preparation"]
+                            )
+                            DispatchQueue.main.async {
+                                print("[CloudSharingControllerSheet] Preparation fetch returned no workspace record")
+                                preparationCompletionHandler(nil, container, error)
+                            }
+                            return
+                        }
+
+                        print("[CloudSharingControllerSheet] Preparation handler fetched workspace record successfully")
+                        let share = CKShare(rootRecord: workspaceRecord)
+                        share[CKShare.SystemFieldKey.title] = "Armadillo Assistant Team" as CKRecordValue
+                        print("[CloudSharingControllerSheet] Preparation handler created CKShare \(share.recordID.recordName)")
+                        let operation = CKModifyRecordsOperation(recordsToSave: [workspaceRecord, share], recordIDsToDelete: nil)
+                        print("[CloudSharingControllerSheet] Preparation handler submitting workspace+share save operation")
+                        operation.modifyRecordsResultBlock = { result in
+                            DispatchQueue.main.async {
+                                switch result {
+                                case .success:
+                                    print("[CloudSharingControllerSheet] Preparation handler saved share \(share.recordID.recordName)")
+                                    preparationCompletionHandler(share, container, nil)
+                                case .failure(let error):
+                                    print("[CloudSharingControllerSheet] Preparation handler failed: \(error.localizedDescription)")
+                                    preparationCompletionHandler(nil, container, error)
+                                }
+                            }
+                        }
+                        privateDatabase.add(operation)
+                    }
+                }
+            }
+
+            sharingController.delegate = coordinator
+            sharingController.availablePermissions = [.allowReadWrite, .allowPrivate]
+            sharingController.presentationController?.delegate = coordinator
+            coordinator.debugLog("About to present UICloudSharingController")
+            present(sharingController, animated: true)
+        }
+    }
+}
 
 // MARK: - 5) Color helpers (for simple local persistence)
 
@@ -793,6 +1285,9 @@ private extension Color {
         return String(format: "#%02X%02X%02X", ri, gi, bi)
     }
 }
+
 #Preview {
     SettingsView()
 }
+
+// End of SettingsView.swift

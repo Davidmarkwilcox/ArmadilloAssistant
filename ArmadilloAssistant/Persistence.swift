@@ -41,6 +41,14 @@ struct PersistenceController {
             storeDescription?.cloudKitContainerOptions =
                 NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.DavidMWilcox.ArmadilloAssistant")
         }
+        // Enable persistent history tracking and remote change notifications.
+        // These are required for reliable CloudKit syncing and future CKShare
+        // collaboration features (team workspace sharing).
+        storeDescription?.setOption(true as NSNumber,
+                                    forKey: NSPersistentHistoryTrackingKey)
+
+        storeDescription?.setOption(true as NSNumber,
+                                    forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
         if inMemory {
             container.persistentStoreDescriptions.first!.url = URL(fileURLWithPath: "/dev/null")
         }

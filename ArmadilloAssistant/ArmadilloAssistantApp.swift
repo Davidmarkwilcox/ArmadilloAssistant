@@ -25,7 +25,7 @@ struct ArmadilloAssistantApp: App {
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
                 .preferredColorScheme(.dark)
                 .tint(Theme.Colors.crimson)
-                .onChange(of: scenePhase) { newPhase in
+                .onChange(of: scenePhase) { _, newPhase in
                     if newPhase == .active {
                         AppLockManager.shared.lockIfNeeded()
                     }
