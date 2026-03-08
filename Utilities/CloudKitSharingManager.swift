@@ -37,6 +37,7 @@ final class CloudKitSharingManager: ObservableObject {
     @Published private(set) var inviteStatusText: String = "Prepare the workspace to enable invitations"
     @Published private(set) var activeWorkspaceRecordID: CKRecord.ID?
     @Published private(set) var canPresentShareSheet: Bool = false
+    @Published private(set) var participantSummaries: [ParticipantSummary] = []
 
     private let workspaceRecordType = "Workspace"
     private let workspaceRecordName = "primary-workspace"
@@ -51,7 +52,7 @@ final class CloudKitSharingManager: ObservableObject {
         self.sharedDatabase = container.sharedCloudDatabase
         self.systemSharingUIObserver = CKSystemSharingUIObserver(container: container)
 
-        let saveShareHandler: (CKRecord.ID, Result<CKShare, Error>) -> Void = { [weak self] _, result in
+        let saveShareHandler: @Sendable (CKRecord.ID, Result<CKShare, Error>) -> Void = { [weak self] _, result in
             DispatchQueue.main.async {
                 guard let self else { return }
 
@@ -60,6 +61,7 @@ final class CloudKitSharingManager: ObservableObject {
                     self.activeShareRecordID = share.recordID
                     self.activeShareURL = share.url
                     self.activeShare = share
+                    self.syncParticipantSummaries(from: share)
                     self.persistActiveShareRecordID(share.recordID)
                     self.canPresentShareSheet = true
                     self.isInviteLinkReady = (share.url != nil)
@@ -78,7 +80,7 @@ final class CloudKitSharingManager: ObservableObject {
         }
         self.systemSharingUIObserver.systemSharingUIDidSaveShareBlock = saveShareHandler
 
-        let stopSharingHandler: (CKRecord.ID, Result<Void, Error>) -> Void = { [weak self] _, result in
+        let stopSharingHandler: @Sendable (CKRecord.ID, Result<Void, Error>) -> Void = { [weak self] _, result in
             DispatchQueue.main.async {
                 guard let self else { return }
 
@@ -87,6 +89,7 @@ final class CloudKitSharingManager: ObservableObject {
                     self.activeShareRecordID = nil
                     self.activeShareURL = nil
                     self.activeShare = nil
+                    self.participantSummaries = []
                     self.persistActiveShareRecordID(nil)
                     self.canPresentShareSheet = false
                     self.isInviteLinkReady = false
@@ -158,6 +161,16 @@ final class CloudKitSharingManager: ObservableObject {
         privateDatabase.add(operation)
     }
 
+    struct ParticipantSummary: Identifiable, Equatable {
+        let id: String
+        let displayName: String
+        let emailAddress: String
+        let role: String
+        let permission: String
+        let acceptanceStatus: String
+        let userRecordName: String
+    }
+
     struct OwnerTeamSeed {
         let displayName: String
         let status: String
@@ -172,6 +185,154 @@ final class CloudKitSharingManager: ObservableObject {
             title: title,
             cloudKitUserID: ""
         )
+    }
+
+
+    private func participantRoleText(_ role: CKShare.ParticipantRole) -> String {
+        switch role {
+        case .owner:
+            return "Owner"
+        case .privateUser:
+            return "Private User"
+        case .publicUser:
+            return "Public User"
+        default:
+            return "Unknown"
+        }
+    }
+
+    private func participantPermissionText(_ permission: CKShare.ParticipantPermission) -> String {
+        switch permission {
+        case .none:
+            return "None"
+        case .readOnly:
+            return "Read Only"
+        case .readWrite:
+            return "Read & Write"
+        default:
+            return "Unknown"
+        }
+    }
+
+    private func participantAcceptanceStatusText(_ status: CKShare.ParticipantAcceptanceStatus) -> String {
+        switch status {
+        case .pending:
+            return "Invited"
+        case .accepted:
+            return "Active"
+        case .removed:
+            return "Removed"
+        default:
+            return "Unknown"
+        }
+    }
+
+    private func participantDisplayName(from participant: CKShare.Participant) -> String {
+        if let components = participant.userIdentity.nameComponents {
+            let formatter = PersonNameComponentsFormatter()
+            let formatted = formatter.string(from: components).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !formatted.isEmpty {
+                return formatted
+            }
+        }
+
+        if let email = participant.userIdentity.lookupInfo?.emailAddress,
+           !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return email
+        }
+
+        return "Unknown Participant"
+    }
+
+    private func participantEmailAddress(from participant: CKShare.Participant) -> String {
+        participant.userIdentity.lookupInfo?.emailAddress ?? ""
+    }
+
+    private func buildParticipantSummary(from participant: CKShare.Participant) -> ParticipantSummary {
+        let userRecordName = ""
+        let rawDisplayName = participantDisplayName(from: participant)
+        let emailAddress = participantEmailAddress(from: participant)
+        let isOwner = participant.role == .owner
+        let displayName: String
+
+        if isOwner && rawDisplayName == "Unknown Participant" {
+            displayName = ownerDisplayName
+        } else {
+            displayName = rawDisplayName
+        }
+
+        let summaryID = !userRecordName.isEmpty
+            ? userRecordName
+            : "\(displayName)|\(emailAddress)|\(participant.role.rawValue)|\(participant.acceptanceStatus.rawValue)"
+
+        return ParticipantSummary(
+            id: summaryID,
+            displayName: displayName,
+            emailAddress: emailAddress,
+            role: participantRoleText(participant.role),
+            permission: participantPermissionText(participant.permission),
+            acceptanceStatus: participantAcceptanceStatusText(participant.acceptanceStatus),
+            userRecordName: userRecordName
+        )
+    }
+
+    private func syncParticipantSummaries(from share: CKShare) {
+        let summaries = share.participants
+            .map { buildParticipantSummary(from: $0) }
+            .sorted { lhs, rhs in
+                if lhs.role == rhs.role {
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+                if lhs.role == "Owner" { return true }
+                if rhs.role == "Owner" { return false }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+
+        participantSummaries = summaries
+        log("Participant summaries refreshed: \(summaries.count)")
+    }
+
+    func refreshParticipantSummaries(completion: ((Result<[ParticipantSummary], Error>) -> Void)? = nil) {
+        if let activeShare {
+            syncParticipantSummaries(from: activeShare)
+            completion?(.success(participantSummaries))
+            return
+        }
+
+        guard let activeShareRecordID else {
+            participantSummaries = []
+            let error = NSError(
+                domain: "CloudKitSharingManager",
+                code: -12,
+                userInfo: [NSLocalizedDescriptionKey: "No active workspace share is available for participant refresh"]
+            )
+            completion?(.failure(error))
+            return
+        }
+
+        fetchSavedShareURL(for: activeShareRecordID) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    if let activeShare = self.activeShare {
+                        self.syncParticipantSummaries(from: activeShare)
+                        completion?(.success(self.participantSummaries))
+                    } else {
+                        self.participantSummaries = []
+                        let error = NSError(
+                            domain: "CloudKitSharingManager",
+                            code: -13,
+                            userInfo: [NSLocalizedDescriptionKey: "Workspace share was fetched but is not available in memory"]
+                        )
+                        completion?(.failure(error))
+                    }
+                case .failure(let error):
+                    self.participantSummaries = []
+                    completion?(.failure(error))
+                }
+            }
+        }
     }
 
     func refreshShareStatus() {
@@ -232,6 +393,7 @@ final class CloudKitSharingManager: ObservableObject {
             }
         }
     }
+
 
     func createWorkspaceIfNeeded(completion: ((Result<Void, Error>) -> Void)? = nil) {
         isLoading = true
@@ -331,6 +493,7 @@ final class CloudKitSharingManager: ObservableObject {
                                 self.activeShareRecordID = nil
                                 self.activeShareURL = nil
                                 self.activeShare = nil
+                                self.participantSummaries = []
                                 self.canPresentShareSheet = true
                                 self.isInviteLinkReady = false
                                 self.shareStatusText = "Workspace is ready for team sharing"
@@ -401,7 +564,6 @@ final class CloudKitSharingManager: ObservableObject {
         ensureWorkspaceAndShare { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-
                 switch result {
                 case .success(let share):
                     if let shareURL = share.url {
@@ -419,11 +581,7 @@ final class CloudKitSharingManager: ObservableObject {
                                         self.inviteStatusText = "Invitation link is ready"
                                         completion?(.success(fetchedURL))
                                     } else {
-                                        let error = NSError(
-                                            domain: "CloudKitSharingManager",
-                                            code: -6,
-                                            userInfo: [NSLocalizedDescriptionKey: "Workspace share exists, but no invitation URL is currently available. The next step is to use UICloudSharingController rather than a raw share URL."]
-                                        )
+                                        let error = NSError(domain: "CloudKitSharingManager", code: -6, userInfo: [NSLocalizedDescriptionKey: "Workspace share exists, but no invitation URL is currently available. The next step is to use UICloudSharingController rather than a raw share URL."])
                                         self.isInviteLinkReady = false
                                         self.inviteStatusText = "Workspace share is ready, but no invitation URL is available yet."
                                         self.lastErrorMessage = error.localizedDescription
@@ -438,11 +596,7 @@ final class CloudKitSharingManager: ObservableObject {
                             }
                         }
                     } else {
-                        let error = NSError(
-                            domain: "CloudKitSharingManager",
-                            code: -6,
-                            userInfo: [NSLocalizedDescriptionKey: "Workspace share exists, but no invitation URL is currently available. The next step is to use UICloudSharingController rather than a raw share URL."]
-                        )
+                        let error = NSError(domain: "CloudKitSharingManager", code: -6, userInfo: [NSLocalizedDescriptionKey: "Workspace share exists, but no invitation URL is currently available. The next step is to use UICloudSharingController rather than a raw share URL."])
                         self.isInviteLinkReady = false
                         self.inviteStatusText = "Workspace share is ready, but no invitation URL is available yet."
                         self.lastErrorMessage = error.localizedDescription
@@ -476,6 +630,7 @@ final class CloudKitSharingManager: ObservableObject {
         }
     }
 
+
     private func fetchSavedShareURL(for shareRecordID: CKRecord.ID,
                                     completion: ((Result<Void, Error>) -> Void)? = nil) {
         privateDatabase.fetch(withRecordID: shareRecordID) { [weak self] record, error in
@@ -502,6 +657,7 @@ final class CloudKitSharingManager: ObservableObject {
                 self.activeShareRecordID = shareRecord.recordID
                 self.activeShareURL = shareRecord.url
                 self.activeShare = shareRecord
+                self.syncParticipantSummaries(from: shareRecord)
                 self.persistActiveShareRecordID(shareRecord.recordID)
                 self.canPresentShareSheet = true
                 self.isLoading = false
@@ -585,6 +741,7 @@ final class CloudKitSharingManager: ObservableObject {
                 self.activeShareRecordID = shareRecord.recordID
                 self.activeShareURL = shareRecord.url
                 self.activeShare = shareRecord
+                self.syncParticipantSummaries(from: shareRecord)
                 self.canPresentShareSheet = true
                 self.isInviteLinkReady = (shareRecord.url != nil)
                 self.isLoading = false
@@ -604,6 +761,7 @@ final class CloudKitSharingManager: ObservableObject {
         activeShareRecordID = nil
         activeShareURL = nil
         activeShare = nil
+        participantSummaries = []
         activeWorkspaceRecordID = nil
         canPresentShareSheet = false
         isInviteLinkReady = false
@@ -617,6 +775,7 @@ final class CloudKitSharingManager: ObservableObject {
         activeShareRecordID = nil
         activeShareURL = nil
         activeShare = nil
+        participantSummaries = []
         canPresentShareSheet = false
         isInviteLinkReady = false
         isLoading = false

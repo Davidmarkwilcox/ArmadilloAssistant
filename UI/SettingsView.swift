@@ -20,9 +20,23 @@ struct SettingsView: View {
     // MARK: - 1) Debug (default Off)
     private let debugEnabled: Bool = false
 
+    @StateObject private var sharingManager = CloudKitSharingManager.shared
+    @State private var hasPerformedInitialSettingsSessionRefresh: Bool = false
+
     private func debugLog(_ message: String) {
         guard debugEnabled else { return }
         print("[SettingsView] \(message)")
+    }
+
+    private func performInitialSettingsSessionRefreshIfNeeded() {
+        guard !hasPerformedInitialSettingsSessionRefresh else { return }
+        hasPerformedInitialSettingsSessionRefresh = true
+
+        sharingManager.refreshShareStatus()
+        sharingManager.refreshParticipantSummaries { _ in
+            // No local UI state is needed here. This warms the shared manager so
+            // TeamSettingsView has the latest workspace + participant data on first open.
+        }
     }
 
     // MARK: - 2) View
@@ -66,6 +80,7 @@ struct SettingsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 debugLog("Appeared")
+                performInitialSettingsSessionRefreshIfNeeded()
             }
         }
     }
@@ -76,11 +91,11 @@ struct SettingsView: View {
 private struct TeamSettingsView: View {
 
     struct TeamMember: Identifiable {
-        let id = UUID()
+        let id: String
         var name: String
         var email: String
         var title: String
-        var status: String   // "Owner", "Active", or "Invited"
+        var status: String   // Derived from CloudKit share participant acceptance state
         var cloudKitUserID: String
         var canResendInvite: Bool
         var canRecallInvite: Bool
@@ -102,8 +117,9 @@ private struct TeamSettingsView: View {
         let ownerSeed = sharingManager.ownerTeamMemberSeed()
         members.insert(
             TeamMember(
+                id: "owner-local-row",
                 name: ownerSeed.displayName,
-                email: ownerSeed.displayName,
+                email: "",
                 title: ownerSeed.title,
                 status: ownerSeed.status,
                 cloudKitUserID: ownerSeed.cloudKitUserID,
@@ -114,6 +130,57 @@ private struct TeamSettingsView: View {
             ),
             at: 0
         )
+    }
+
+    private func refreshMembersFromShare() {
+        let existingTitles = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0.title) })
+
+        let refreshedMembers = sharingManager.participantSummaries.map { participant in
+            let status = participant.acceptanceStatus
+            let isOwner = participant.role == "Owner"
+            let resolvedEmail = participant.emailAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedName = participant.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            return TeamMember(
+                id: participant.id,
+                name: resolvedName.isEmpty ? "Unknown Participant" : resolvedName,
+                email: resolvedEmail,
+                title: existingTitles[participant.id] ?? "",
+                status: status,
+                cloudKitUserID: participant.userRecordName,
+                canResendInvite: status == "Invited" && !isOwner,
+                canRecallInvite: status == "Invited" && !isOwner,
+                canRemoveAccess: status == "Active" && !isOwner,
+                isOwnerRow: isOwner
+            )
+        }
+
+        members = refreshedMembers
+
+        if members.isEmpty {
+            seedOwnerRowIfNeeded()
+        }
+    }
+
+
+    private func refreshWorkspaceAndParticipantsAfterSharingUI() {
+        sharingManager.refreshShareStatus()
+        inviteStatusMessage = sharingManager.inviteStatusText
+        shareSheetStatusMessage = sharingManager.canPresentShareSheet
+            ? "Workspace share is ready for Apple share sheet presentation."
+            : "Prepare the workspace to enable invite presentation"
+        pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? ""
+
+        sharingManager.refreshParticipantSummaries { _ in
+            DispatchQueue.main.async {
+                inviteStatusMessage = sharingManager.inviteStatusText
+                shareSheetStatusMessage = sharingManager.canPresentShareSheet
+                    ? "Workspace share is ready for Apple share sheet presentation."
+                    : "Prepare the workspace to enable invite presentation"
+                pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? ""
+                refreshMembersFromShare()
+            }
+        }
     }
 
     private func manageTeamSharing() {
@@ -155,7 +222,7 @@ private struct TeamSettingsView: View {
         }
     }
 
-    private func resendInvite(for memberID: UUID) {
+    private func resendInvite(for memberID: String) {
         guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
         guard members[index].status == "Invited" else { return }
 
@@ -199,7 +266,7 @@ private struct TeamSettingsView: View {
         }
     }
 
-    private func recallInvite(for memberID: UUID) {
+    private func recallInvite(for memberID: String) {
         guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
         guard members[index].status == "Invited" else { return }
 
@@ -207,7 +274,7 @@ private struct TeamSettingsView: View {
         members.remove(at: index)
     }
 
-    private func removeAccess(for memberID: UUID) {
+    private func removeAccess(for memberID: String) {
         guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
         guard members[index].status == "Active", !members[index].isOwnerRow else { return }
 
@@ -315,7 +382,7 @@ private struct TeamSettingsView: View {
                     ForEach($members) { $member in
                         VStack(alignment: .leading, spacing: 8) {
 
-                            Text(member.isOwnerRow ? member.name : member.email)
+                            Text(member.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? member.name : member.email)
                                 .font(.headline)
 
                             HStack {
@@ -325,6 +392,17 @@ private struct TeamSettingsView: View {
 
                                 Text(member.status)
                                     .font(.caption)
+                            }
+
+                            if !member.isOwnerRow, !member.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                HStack {
+                                    Text("Name:")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    Text(member.name)
+                                        .font(.caption)
+                                }
                             }
 
                             if member.isOwnerRow {
@@ -383,15 +461,24 @@ private struct TeamSettingsView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Team")
         .onAppear {
-            sharingManager.refreshShareStatus()
-            seedOwnerRowIfNeeded()
             inviteStatusMessage = sharingManager.inviteStatusText
             shareSheetStatusMessage = sharingManager.canPresentShareSheet
                 ? "Workspace share is ready for Apple share sheet presentation."
                 : "Prepare the workspace to enable invite presentation"
             pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? ""
+            refreshMembersFromShare()
         }
-        .sheet(isPresented: $isShowingCloudSharingController) {
+        .onReceive(sharingManager.$participantSummaries) { _ in
+            inviteStatusMessage = sharingManager.inviteStatusText
+            shareSheetStatusMessage = sharingManager.canPresentShareSheet
+                ? "Workspace share is ready for Apple share sheet presentation."
+                : "Prepare the workspace to enable invite presentation"
+            pendingInviteLink = sharingManager.activeShareURL?.absoluteString ?? ""
+            refreshMembersFromShare()
+        }
+        .sheet(isPresented: $isShowingCloudSharingController, onDismiss: {
+            refreshWorkspaceAndParticipantsAfterSharingUI()
+        }) {
             CloudSharingControllerSheet(share: shareToPresent)
         }
     }
@@ -486,7 +573,7 @@ private struct ProfileSettingsView: View {
         isLoadingCloudKitIdentity = true
         cloudKitStatusText = "Checking iCloud account…"
 
-        let container = CKContainer(identifier: "DavidMWilcox.ArmadilloAssistant")
+        let container = CKContainer(identifier: CloudKitSharingManager.containerIdentifier)
         container.accountStatus { status, error in
             if let error {
                 DispatchQueue.main.async {
