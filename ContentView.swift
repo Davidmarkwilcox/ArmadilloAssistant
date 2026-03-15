@@ -39,7 +39,7 @@ struct ContentView: View {
             TabView {
                 ExpensesView()
                     .tabItem {
-                        Label("Expenses", systemImage: Tab.bookings.systemImageName)
+                        Label("Expenses", systemImage: Tab.expenses.systemImageName)
                     }
 
                 BookingsView()
@@ -49,7 +49,7 @@ struct ContentView: View {
 
                 NarrativeView()
                     .tabItem {
-                        Label("Narrative", systemImage: Tab.bookings.systemImageName)
+                        Label("Narrative", systemImage: Tab.narrative.systemImageName)
                     }
 
                 SettingsView()
