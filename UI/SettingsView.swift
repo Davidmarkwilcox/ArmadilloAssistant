@@ -14,6 +14,7 @@ import SwiftUI
 import PhotosUI
 import UIKit
 import CloudKit
+import CoreData
 
 struct SettingsView: View {
 
@@ -60,6 +61,12 @@ struct SettingsView: View {
                         }
 
                         NavigationLink {
+                            ExpenseSettingsView()
+                        } label: {
+                            Label("Expenses", systemImage: "dollarsign.circle")
+                        }
+
+                        NavigationLink {
                             TeamSettingsView()
                         } label: {
                             Label("Team", systemImage: "person.3")
@@ -82,6 +89,286 @@ struct SettingsView: View {
                 debugLog("Appeared")
                 performInitialSettingsSessionRefreshIfNeeded()
             }
+        }
+    }
+}
+
+private struct ExpenseSettingsView: View {
+
+    // MARK: - 1) Debug (default Off)
+    private let debugEnabled: Bool = false
+
+    @Environment(\.managedObjectContext) private var viewContext
+
+    @AppStorage("expense_currentMileageRate") private var storedMileageRate: Double = 0.67
+    @State private var mileageRateText: String = ""
+
+    @State private var newProjectName: String = ""
+    @State private var newCategoryName: String = ""
+
+    @FetchRequest(
+        sortDescriptors: [
+            NSSortDescriptor(key: "sortOrder", ascending: true),
+            NSSortDescriptor(key: "name", ascending: true)
+        ],
+        animation: .default
+    ) private var projects: FetchedResults<ExpenseProject>
+
+    @FetchRequest(
+        sortDescriptors: [
+            NSSortDescriptor(key: "sortOrder", ascending: true),
+            NSSortDescriptor(key: "name", ascending: true)
+        ],
+        animation: .default
+    ) private var categories: FetchedResults<ExpenseCategory>
+
+    private func debugLog(_ message: String) {
+        guard debugEnabled else { return }
+        print("[ExpenseSettingsView] \(message)")
+    }
+
+    private func loadMileageRateIfNeeded() {
+        if mileageRateText.isEmpty {
+            mileageRateText = String(format: "%.3f", storedMileageRate)
+        }
+    }
+
+    private func saveContextIfNeeded() {
+        guard viewContext.hasChanges else { return }
+
+        do {
+            try viewContext.save()
+            debugLog("Saved expense settings changes")
+        } catch {
+            let nsError = error as NSError
+            debugLog("Failed to save expense settings changes: \(nsError), \(nsError.userInfo)")
+        }
+    }
+
+    private func normalizedName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func saveMileageRate() {
+        let trimmed = mileageRateText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Double(trimmed), parsed >= 0 else {
+            mileageRateText = String(format: "%.3f", storedMileageRate)
+            return
+        }
+
+        storedMileageRate = parsed
+        mileageRateText = String(format: "%.3f", parsed)
+        debugLog("Updated mileage rate to \(parsed)")
+    }
+
+    private func nextProjectSortOrder() -> Int32 {
+        (projects.map(\.sortOrder).max() ?? -1) + 1
+    }
+
+    private func nextCategorySortOrder() -> Int32 {
+        (categories.map(\.sortOrder).max() ?? -1) + 1
+    }
+
+    private func addProject() {
+        let name = normalizedName(newProjectName)
+        guard !name.isEmpty else { return }
+        guard !projects.contains(where: { ($0.name ?? "").caseInsensitiveCompare(name) == .orderedSame }) else {
+            newProjectName = ""
+            return
+        }
+
+        let now = Date()
+        let project = ExpenseProject(context: viewContext)
+        project.id = UUID()
+        project.name = name
+        project.isActive = true
+        project.sortOrder = nextProjectSortOrder()
+        project.createdAt = now
+        project.createdBy = "System"
+        project.lastModifiedAt = now
+        project.lastModifiedBy = "System"
+
+        newProjectName = ""
+        saveContextIfNeeded()
+    }
+
+    private func addCategory() {
+        let name = normalizedName(newCategoryName)
+        guard !name.isEmpty else { return }
+        guard !categories.contains(where: { ($0.name ?? "").caseInsensitiveCompare(name) == .orderedSame }) else {
+            newCategoryName = ""
+            return
+        }
+
+        let now = Date()
+        let category = ExpenseCategory(context: viewContext)
+        category.id = UUID()
+        category.name = name
+        category.isActive = true
+        category.sortOrder = nextCategorySortOrder()
+        category.createdAt = now
+        category.createdBy = "System"
+        category.lastModifiedAt = now
+        category.lastModifiedBy = "System"
+
+        newCategoryName = ""
+        saveContextIfNeeded()
+    }
+
+    private func touchProject(_ project: ExpenseProject) {
+        project.lastModifiedAt = Date()
+        project.lastModifiedBy = "System"
+        saveContextIfNeeded()
+    }
+
+    private func touchCategory(_ category: ExpenseCategory) {
+        category.lastModifiedAt = Date()
+        category.lastModifiedBy = "System"
+        saveContextIfNeeded()
+    }
+
+    private func deleteProjects(at offsets: IndexSet) {
+        for index in offsets {
+            viewContext.delete(projects[index])
+        }
+        saveContextIfNeeded()
+    }
+
+    private func deleteCategories(at offsets: IndexSet) {
+        for index in offsets {
+            viewContext.delete(categories[index])
+        }
+        saveContextIfNeeded()
+    }
+
+    var body: some View {
+        List {
+            Section {
+                TextField("Mileage Rate", text: $mileageRateText)
+                    .keyboardType(.decimalPad)
+                    .onSubmit {
+                        saveMileageRate()
+                    }
+
+                Button {
+                    saveMileageRate()
+                } label: {
+                    Label("Save Mileage Rate", systemImage: "gauge.with.dots.needle.67percent")
+                }
+            } header: {
+                Text("Mileage")
+            } footer: {
+                Text("New mileage expenses will default to this reimbursement rate, but individual expense records can still override it.")
+            }
+
+            Section {
+                HStack {
+                    TextField("Add Project", text: $newProjectName)
+                        .textInputAutocapitalization(.words)
+
+                    Button("Add") {
+                        addProject()
+                    }
+                    .disabled(normalizedName(newProjectName).isEmpty)
+                }
+
+                if projects.isEmpty {
+                    Text("No projects yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(projects) { project in
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField(
+                                "Project Name",
+                                text: Binding(
+                                    get: { project.name ?? "" },
+                                    set: { project.name = $0 }
+                                )
+                            )
+                            .textInputAutocapitalization(.words)
+                            .onSubmit {
+                                project.name = normalizedName(project.name ?? "")
+                                touchProject(project)
+                            }
+
+                            Toggle(
+                                "Active",
+                                isOn: Binding(
+                                    get: { project.isActive },
+                                    set: {
+                                        project.isActive = $0
+                                        touchProject(project)
+                                    }
+                                )
+                            )
+                            .font(.caption)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .onDelete(perform: deleteProjects)
+                }
+            } header: {
+                Text("Projects")
+            } footer: {
+                Text("Projects drive the Expense Project dropdown. You can rename values, retire them by turning off Active, or delete them entirely.")
+            }
+
+            Section {
+                HStack {
+                    TextField("Add Category", text: $newCategoryName)
+                        .textInputAutocapitalization(.words)
+
+                    Button("Add") {
+                        addCategory()
+                    }
+                    .disabled(normalizedName(newCategoryName).isEmpty)
+                }
+
+                if categories.isEmpty {
+                    Text("No categories yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(categories) { category in
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField(
+                                "Category Name",
+                                text: Binding(
+                                    get: { category.name ?? "" },
+                                    set: { category.name = $0 }
+                                )
+                            )
+                            .textInputAutocapitalization(.words)
+                            .onSubmit {
+                                category.name = normalizedName(category.name ?? "")
+                                touchCategory(category)
+                            }
+
+                            Toggle(
+                                "Active",
+                                isOn: Binding(
+                                    get: { category.isActive },
+                                    set: {
+                                        category.isActive = $0
+                                        touchCategory(category)
+                                    }
+                                )
+                            )
+                            .font(.caption)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .onDelete(perform: deleteCategories)
+                }
+            } header: {
+                Text("Categories")
+            } footer: {
+                Text("Categories drive the Expense Category dropdown. Use quoted CSV values during import/export so commas in Notes stay safe and separate from category names.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Expenses")
+        .onAppear {
+            loadMileageRateIfNeeded()
         }
     }
 }
@@ -1134,20 +1421,40 @@ private struct PropertySettingsView: View {
 private struct DataManagementSettingsView: View {
     var body: some View {
         List {
-            Section("Export") {
+            Section {
                 Button {
                     // Placeholder
                 } label: {
                     Label("Export reservations to CSV", systemImage: "square.and.arrow.up")
                 }
+
+                Button {
+                    // Placeholder
+                } label: {
+                    Label("Export expenses to CSV", systemImage: "square.and.arrow.up.on.square")
+                }
+            } header: {
+                Text("Export")
+            } footer: {
+                Text("Expense CSV export will use canonical headers and standard CSV escaping so commas in Notes remain safe during export and re-import.")
             }
 
-            Section("Import") {
+            Section {
                 Button {
                     // Placeholder
                 } label: {
                     Label("Import reservations", systemImage: "square.and.arrow.down")
                 }
+
+                Button {
+                    // Placeholder
+                } label: {
+                    Label("Import expenses from CSV", systemImage: "square.and.arrow.down.on.square")
+                }
+            } header: {
+                Text("Import")
+            } footer: {
+                Text("Expense imports will expect the canonical CSV column layout and will support quoted Notes values so embedded commas do not break parsing.")
             }
 
             Section {
@@ -1155,6 +1462,12 @@ private struct DataManagementSettingsView: View {
                     // Placeholder
                 } label: {
                     Label("Delete all reservation data", systemImage: "trash")
+                }
+
+                Button(role: .destructive) {
+                    // Placeholder
+                } label: {
+                    Label("Delete all expense data", systemImage: "trash.slash")
                 }
             } header: {
                 Text("Deletion")
@@ -1280,7 +1593,7 @@ private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
                 sharingController = UICloudSharingController(share: share, container: container)
             } else {
                 debugLog("Presenting sharing controller with preparation handler")
-                sharingController = UICloudSharingController { _, preparationCompletionHandler in
+                sharingController = UICloudSharingController(preparationHandler: { _, preparationCompletionHandler in
                     print("[CloudSharingControllerSheet] Preparation handler entered")
                     let zoneID = CKRecordZone.ID(zoneName: "TeamWorkspaceZone", ownerName: CKCurrentUserDefaultName)
                     let workspaceID = CKRecord.ID(recordName: "primary-workspace", zoneID: zoneID)
@@ -1331,7 +1644,7 @@ private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
                         }
                         privateDatabase.add(operation)
                     }
-                }
+                })
             }
 
             sharingController.delegate = coordinator

@@ -13,18 +13,7 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
-        for _ in 0..<10 {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
-        }
-        do {
-            try viewContext.save()
-        } catch {
-            // Replace this implementation with code to handle the error appropriately.
-            // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-            let nsError = error as NSError
-            fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
-        }
+        viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         return result
     }()
 
@@ -69,5 +58,65 @@ struct PersistenceController {
             }
         })
         container.viewContext.automaticallyMergesChangesFromParent = true
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        seedExpenseReferenceDataIfNeeded(context: container.viewContext)
+    }
+    private func seedExpenseReferenceDataIfNeeded(context: NSManagedObjectContext) {
+        let projectFetchRequest: NSFetchRequest<ExpenseProject> = ExpenseProject.fetchRequest()
+        projectFetchRequest.fetchLimit = 1
+
+        do {
+            let existingProjectCount = try context.count(for: projectFetchRequest)
+            guard existingProjectCount == 0 else { return }
+
+            let now = Date()
+            let seedUser = "System"
+
+            let defaultProjects = [
+                "General - 12 Armadillos",
+                "General - Barndominium",
+                "General - Main Street",
+                "General - Washington"
+            ]
+
+            let defaultCategories = [
+                "Supplies",
+                "Transportation",
+                "Meals & Expenses",
+                "Marketing",
+                "Vendor Payments"
+            ]
+
+            for (index, name) in defaultProjects.enumerated() {
+                let project = ExpenseProject(context: context)
+                project.id = UUID()
+                project.name = name
+                project.isActive = true
+                project.sortOrder = Int32(index)
+                project.createdAt = now
+                project.createdBy = seedUser
+                project.lastModifiedAt = now
+                project.lastModifiedBy = seedUser
+            }
+
+            for (index, name) in defaultCategories.enumerated() {
+                let category = ExpenseCategory(context: context)
+                category.id = UUID()
+                category.name = name
+                category.isActive = true
+                category.sortOrder = Int32(index)
+                category.createdAt = now
+                category.createdBy = seedUser
+                category.lastModifiedAt = now
+                category.lastModifiedBy = seedUser
+            }
+
+            if context.hasChanges {
+                try context.save()
+            }
+        } catch {
+            let nsError = error as NSError
+            fatalError("Failed to seed expense reference data: \(nsError), \(nsError.userInfo)")
+        }
     }
 }

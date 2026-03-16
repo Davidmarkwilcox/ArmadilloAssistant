@@ -1,9 +1,45 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="1" systemVersion="11A491" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="true" userDefinedModelVersionIdentifier="">
-    <entity name="Item" representedClassName="Item" syncable="YES" codeGenerationType="class">
-        <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24512" systemVersion="25D2128" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+    <entity name="Expense" representedClassName=".Expense" syncable="YES" codeGenerationType="class">
+        <attribute name="category" attributeType="String" defaultValueString="Supplies"/>
+        <attribute name="createdAt" attributeType="Date" defaultDateTimeInterval="795297720" usesScalarValueType="NO"/>
+        <attribute name="createdBy" attributeType="String" defaultValueString=""/>
+        <attribute name="expenseAmount" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="expenseDate" attributeType="Date" defaultDateTimeInterval="795297720" usesScalarValueType="NO"/>
+        <attribute name="expenser" attributeType="String" defaultValueString=""/>
+        <attribute name="expenseType" attributeType="String" defaultValueString="Direct Expense"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedAt" attributeType="Date" defaultDateTimeInterval="795297780" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedBy" optional="YES" attributeType="String" defaultValueString=""/>
+        <attribute name="mileage" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="mileageRate" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="notes" optional="YES" attributeType="String" defaultValueString=""/>
+        <attribute name="project" attributeType="String" defaultValueString="General - 12 Armadillos"/>
+        <attribute name="reimbursed" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="reimbursementAmount" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <relationship name="categoryRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="ExpenseCategory" inverseName="expenses" inverseEntity="ExpenseCategory"/>
+        <relationship name="projectRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="ExpenseProject" inverseName="expenses" inverseEntity="ExpenseProject"/>
     </entity>
-    <elements>
-        <element name="Item" positionX="-63" positionY="-18" width="128" height="44"/>
-    </elements>
+    <entity name="ExpenseCategory" representedClassName=".ExpenseCategory" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdBy" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isActive" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="lastModifiedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedBy" optional="YES" attributeType="String"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <relationship name="expenses" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Expense" inverseName="categoryRef" inverseEntity="Expense"/>
+    </entity>
+    <entity name="ExpenseProject" representedClassName=".ExpenseProject" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdBy" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isActive" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="lastModifiedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedBy" optional="YES" attributeType="String"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <relationship name="expenses" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Expense" inverseName="projectRef" inverseEntity="Expense"/>
+    </entity>
 </model>
