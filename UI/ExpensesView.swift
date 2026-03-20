@@ -83,6 +83,134 @@ struct ExpensesView: View {
         var notes: String = ""
     }
 
+    enum ExpenseCSVExportError: LocalizedError {
+        case failedToWriteFile
+
+        var errorDescription: String? {
+            switch self {
+            case .failedToWriteFile:
+                return "Unable to create the expenses CSV export file."
+            }
+        }
+    }
+
+    struct ExpenseCSVExporter {
+        private static let headers: [String] = [
+            "Expense Type",
+            "Expense Date",
+            "Project",
+            "Category",
+            "Expenser",
+            "Reimbursed?",
+            "Expense Amount",
+            "Mileage",
+            "Mileage Rate",
+            "Reimbursement Amount",
+            "Notes"
+        ]
+
+        private static let dateFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter
+        }()
+
+        private static let twoDecimalFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = false
+            formatter.minimumFractionDigits = 2
+            formatter.maximumFractionDigits = 2
+            return formatter
+        }()
+
+        private static let mileageFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = false
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 2
+            return formatter
+        }()
+
+        private static let fileNameFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyyMMdd-HHmm"
+            return formatter
+        }()
+
+        static func fetchExpenses(context: NSManagedObjectContext) throws -> [Expense] {
+            let request: NSFetchRequest<Expense> = Expense.fetchRequest()
+            request.sortDescriptors = [
+                NSSortDescriptor(keyPath: \Expense.expenseDate, ascending: false),
+                NSSortDescriptor(keyPath: \Expense.createdAt, ascending: false)
+            ]
+            return try context.fetch(request)
+        }
+
+        static func csvString(from expenses: [Expense]) -> String {
+            let headerRow = headers.map(csvEscaped).joined(separator: ",")
+            let rows = expenses.map { expense in
+                let columns: [String] = [
+                    expense.expenseType ?? "",
+                    formattedDate(expense.expenseDate),
+                    expense.project ?? "",
+                    expense.category ?? "",
+                    expense.expenser ?? "",
+                    expense.reimbursed ? "Yes" : "No",
+                    formattedCurrencyValue(expense.expenseAmount),
+                    formattedMileageValue(expense.mileage),
+                    formattedCurrencyValue(expense.mileageRate),
+                    formattedCurrencyValue(expense.reimbursementAmount),
+                    expense.notes ?? ""
+                ]
+                return columns.map(csvEscaped).joined(separator: ",")
+            }
+
+            return ([headerRow] + rows).joined(separator: "\n")
+        }
+
+        static func writeExportFile(context: NSManagedObjectContext) throws -> URL {
+            let expenses = try fetchExpenses(context: context)
+            let csv = csvString(from: expenses)
+            let fileName = "Expenses_\(fileNameFormatter.string(from: Date())).csv"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+
+            do {
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+                return url
+            } catch {
+                throw ExpenseCSVExportError.failedToWriteFile
+            }
+        }
+
+        private static func formattedDate(_ date: Date?) -> String {
+            guard let date else { return "" }
+            return dateFormatter.string(from: date)
+        }
+
+        private static func formattedCurrencyValue(_ value: Double) -> String {
+            twoDecimalFormatter.string(from: NSNumber(value: value)) ?? "0.00"
+        }
+
+        private static func formattedMileageValue(_ value: Double) -> String {
+            mileageFormatter.string(from: NSNumber(value: value)) ?? "0"
+        }
+
+        private static func csvEscaped(_ value: String) -> String {
+            let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+            return "\"\(escaped)\""
+        }
+    }
+
     // MARK: - 1.2 State
 
     @Environment(\.managedObjectContext) private var viewContext
@@ -174,6 +302,10 @@ struct ExpensesView: View {
     }
 
     // MARK: - 1.4 Helpers
+
+    static func makeExpensesCSVExportFile(context: NSManagedObjectContext) throws -> URL {
+        try ExpenseCSVExporter.writeExportFile(context: context)
+    }
 
     private func refreshExpenseData() {
         viewContext.refreshAllObjects()

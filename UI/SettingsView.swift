@@ -1419,6 +1419,23 @@ private struct PropertySettingsView: View {
 }
 
 private struct DataManagementSettingsView: View {
+    @Environment(\.managedObjectContext) private var viewContext
+
+    @State private var exportURL: URL?
+    @State private var isShowingExportShareSheet: Bool = false
+    @State private var exportErrorMessage: String = ""
+    @State private var isShowingExportErrorAlert: Bool = false
+
+    private func exportExpensesCSV() {
+        do {
+            let fileURL = try ExpensesView.makeExpensesCSVExportFile(context: viewContext)
+            exportURL = fileURL
+            isShowingExportShareSheet = true
+        } catch {
+            exportErrorMessage = error.localizedDescription
+            isShowingExportErrorAlert = true
+        }
+    }
     var body: some View {
         List {
             Section {
@@ -1429,7 +1446,7 @@ private struct DataManagementSettingsView: View {
                 }
 
                 Button {
-                    // Placeholder
+                    exportExpensesCSV()
                 } label: {
                     Label("Export expenses to CSV", systemImage: "square.and.arrow.up.on.square")
                 }
@@ -1476,6 +1493,30 @@ private struct DataManagementSettingsView: View {
             }
         }
         .navigationTitle("Data Management")
+        .sheet(isPresented: $isShowingExportShareSheet, onDismiss: {
+            exportURL = nil
+        }) {
+            if let exportURL {
+                ActivityViewSheet(activityItems: [exportURL])
+            }
+        }
+        .alert("Export Failed", isPresented: $isShowingExportErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(exportErrorMessage)
+        }
+    }
+}
+
+private struct ActivityViewSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // No-op
     }
 }
 
