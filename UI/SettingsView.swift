@@ -1421,21 +1421,25 @@ private struct PropertySettingsView: View {
 private struct DataManagementSettingsView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
-    @State private var exportURL: URL?
-    @State private var isShowingExportShareSheet: Bool = false
+    @State private var exportShareItem: ExportShareItem?
     @State private var exportErrorMessage: String = ""
     @State private var isShowingExportErrorAlert: Bool = false
+
+    private struct ExportShareItem: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
 
     private func exportExpensesCSV() {
         do {
             let fileURL = try ExpensesView.makeExpensesCSVExportFile(context: viewContext)
-            exportURL = fileURL
-            isShowingExportShareSheet = true
+            exportShareItem = ExportShareItem(url: fileURL)
         } catch {
             exportErrorMessage = error.localizedDescription
             isShowingExportErrorAlert = true
         }
     }
+
     var body: some View {
         List {
             Section {
@@ -1493,12 +1497,8 @@ private struct DataManagementSettingsView: View {
             }
         }
         .navigationTitle("Data Management")
-        .sheet(isPresented: $isShowingExportShareSheet, onDismiss: {
-            exportURL = nil
-        }) {
-            if let exportURL {
-                ActivityViewSheet(activityItems: [exportURL])
-            }
+        .sheet(item: $exportShareItem) { item in
+            ActivityViewSheet(activityItems: [item.url])
         }
         .alert("Export Failed", isPresented: $isShowingExportErrorAlert) {
             Button("OK", role: .cancel) { }
@@ -1510,13 +1510,109 @@ private struct DataManagementSettingsView: View {
 
 private struct ActivityViewSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
+    private let debugEnabled: Bool = false
 
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    private func debugLog(_ message: String) {
+        guard debugEnabled else { return }
+        print("[ActivityViewSheet] \(message)")
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // No-op
+    func makeCoordinator() -> Coordinator {
+        Coordinator(debugEnabled: debugEnabled)
+    }
+
+    func makeUIViewController(context: Context) -> HostViewController {
+        debugLog("makeUIViewController called")
+        let controller = HostViewController()
+        controller.debugEnabled = debugEnabled
+        controller.coordinator = context.coordinator
+        controller.activityItems = activityItems
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: HostViewController, context: Context) {
+        debugLog("updateUIViewController called")
+        uiViewController.debugEnabled = debugEnabled
+        uiViewController.coordinator = context.coordinator
+        uiViewController.activityItems = activityItems
+    }
+
+    final class Coordinator: NSObject, UIAdaptivePresentationControllerDelegate {
+        private let debugEnabled: Bool
+
+        init(debugEnabled: Bool) {
+            self.debugEnabled = debugEnabled
+        }
+
+        func debugLog(_ message: String) {
+            guard debugEnabled else { return }
+            print("[ActivityViewSheet] \(message)")
+        }
+
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            debugLog("Activity controller dismissed")
+        }
+    }
+
+    final class HostViewController: UIViewController {
+        var debugEnabled: Bool = false
+        weak var coordinator: Coordinator?
+        var activityItems: [Any] = []
+        private var hasPresentedActivityController = false
+
+        private func debugLog(_ message: String) {
+            guard debugEnabled else { return }
+            print("[ActivityViewSheet] \(message)")
+        }
+
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .systemBackground
+            debugLog("Host view did load")
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            debugLog("Host view did appear")
+            presentActivityControllerIfNeeded()
+        }
+
+        private func presentActivityControllerIfNeeded() {
+            guard !hasPresentedActivityController else {
+                debugLog("Host view already presented activity controller")
+                return
+            }
+            guard presentedViewController == nil else {
+                debugLog("Host view already has a presented view controller")
+                return
+            }
+            guard !activityItems.isEmpty else {
+                debugLog("Host view has no activity items to present")
+                return
+            }
+
+            hasPresentedActivityController = true
+
+            let activityController = UIActivityViewController(
+                activityItems: activityItems,
+                applicationActivities: nil
+            )
+            activityController.presentationController?.delegate = coordinator
+
+            if let popover = activityController.popoverPresentationController {
+                popover.sourceView = view
+                popover.sourceRect = CGRect(
+                    x: view.bounds.midX,
+                    y: view.bounds.midY,
+                    width: 1,
+                    height: 1
+                )
+                popover.permittedArrowDirections = []
+            }
+
+            debugLog("About to present UIActivityViewController")
+            present(activityController, animated: true)
+        }
     }
 }
 
