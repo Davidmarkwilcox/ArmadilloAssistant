@@ -15,6 +15,7 @@ import PhotosUI
 import UIKit
 import CloudKit
 import CoreData
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
 
@@ -382,7 +383,7 @@ private struct TeamSettingsView: View {
         var name: String
         var email: String
         var title: String
-        var status: String   // Derived from CloudKit share participant acceptance state
+        var status: String
         var cloudKitUserID: String
         var canResendInvite: Bool
         var canRecallInvite: Bool
@@ -448,7 +449,6 @@ private struct TeamSettingsView: View {
             seedOwnerRowIfNeeded()
         }
     }
-
 
     private func refreshWorkspaceAndParticipantsAfterSharingUI() {
         sharingManager.refreshShareStatus()
@@ -556,16 +556,12 @@ private struct TeamSettingsView: View {
     private func recallInvite(for memberID: String) {
         guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
         guard members[index].status == "Invited" else { return }
-
-        // Placeholder only. Later this will remove the pending CloudKit participant/share invitation.
         members.remove(at: index)
     }
 
     private func removeAccess(for memberID: String) {
         guard let index = members.firstIndex(where: { $0.id == memberID }) else { return }
         guard members[index].status == "Active", !members[index].isOwnerRow else { return }
-
-        // Placeholder only. Later this will remove the accepted CloudKit participant from the share.
         members.remove(at: index)
     }
 
@@ -622,7 +618,6 @@ private struct TeamSettingsView: View {
                         Label("Refresh Workspace Status", systemImage: "arrow.clockwise")
                     }
                     .disabled(sharingManager.isLoading)
-
                 }
             } header: {
                 Text("Workspace")
@@ -654,7 +649,6 @@ private struct TeamSettingsView: View {
                 } label: {
                     Label("Manage Team Sharing", systemImage: "person.badge.key")
                 }
-
             } header: {
                 Text("Team Sharing")
             } footer: {
@@ -668,7 +662,6 @@ private struct TeamSettingsView: View {
                 } else {
                     ForEach($members) { $member in
                         VStack(alignment: .leading, spacing: 8) {
-
                             Text(member.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? member.name : member.email)
                                 .font(.headline)
 
@@ -772,17 +765,12 @@ private struct TeamSettingsView: View {
 }
 
 private struct ProfileSettingsView: View {
-
-    // MARK: - 1) Persistence (placeholder)
-    // NOTE: For v1 this is local-only and unique per device/user.
-    // Later we can replace this with CloudKit-backed user profile data.
     @AppStorage("profile_firstName") private var storedFirstName: String = ""
     @AppStorage("profile_lastName") private var storedLastName: String = ""
     @AppStorage("profile_email") private var storedEmail: String = ""
     @AppStorage("profile_phone") private var storedPhone: String = ""
     @AppStorage("profile_photoBase64") private var storedProfilePhotoBase64: String = ""
 
-    // MARK: - 2) Editing state
     @State private var firstName: String = ""
     @State private var lastName: String = ""
     @State private var email: String = ""
@@ -795,12 +783,10 @@ private struct ProfileSettingsView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // MARK: - 3A) CloudKit User Identity
     @State private var cloudKitStatusText: String = "Checking iCloud account…"
     @State private var cloudKitRecordName: String = ""
     @State private var isLoadingCloudKitIdentity: Bool = false
 
-    // MARK: - 3) Computed
     private var hasUnsavedChanges: Bool {
         guard isInitialized else { return false }
         return firstName != storedFirstName
@@ -810,7 +796,6 @@ private struct ProfileSettingsView: View {
             || (profilePhotoData?.base64EncodedString() ?? "") != storedProfilePhotoBase64
     }
 
-    // MARK: - 4) Actions
     private func loadFromStorageIfNeeded() {
         guard !isInitialized else { return }
         firstName = storedFirstName
@@ -929,7 +914,6 @@ private struct ProfileSettingsView: View {
         }
     }
 
-    // MARK: - 5) View
     var body: some View {
         List {
             Section {
@@ -1089,8 +1073,6 @@ private struct ProfileSettingsView: View {
 }
 
 private struct PropertySettingsView: View {
-
-    // MARK: - 1) Persistence (placeholder)
     @AppStorage("property_name") private var storedPropertyName: String = ""
     @AppStorage("property_shortName") private var storedPropertyShortName: String = ""
     @AppStorage("property_address") private var storedPropertyAddress: String = ""
@@ -1098,39 +1080,30 @@ private struct PropertySettingsView: View {
     @AppStorage("property_cleaningFee") private var storedCleaningFee: Double = 0
     @AppStorage("property_cleaningPayment") private var storedCleaningPayment: Double = 0
     @AppStorage("property_taxRatePercent") private var storedTaxRatePercent: Double = 0
-
     @AppStorage("property_calendarColorHex") private var storedCalendarColorHex: String = "#B31B1B"
 
-    // MARK: - 2) Editing state
     @State private var propertyName: String = ""
     @State private var propertyShortName: String = ""
     @State private var address: String = ""
-
     @State private var cleaningFee: Double = 0
     @State private var cleaningPayment: Double = 0
     @State private var taxRatePercent: Double = 0
-
     @State private var calendarColor: Color = .red
-
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var photos: [PropertyPhoto] = []
     @State private var defaultPhotoID: UUID? = nil
-
     @State private var isInitialized: Bool = false
     @State private var showUnsavedAlert: Bool = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
-    // MARK: - 3) Models
     private struct PropertyPhoto: Identifiable {
         let id: UUID
         let imageData: Data
-
         var uiImage: UIImage? { UIImage(data: imageData) }
     }
 
-    // MARK: - 4) Computed
     private var hasUnsavedChanges: Bool {
         guard isInitialized else { return false }
         return propertyName != storedPropertyName
@@ -1150,20 +1123,15 @@ private struct PropertySettingsView: View {
         return comps.url
     }
 
-    // MARK: - 5) Actions
     private func loadFromStorageIfNeeded() {
         guard !isInitialized else { return }
-
         propertyName = storedPropertyName
         propertyShortName = storedPropertyShortName
         address = storedPropertyAddress
-
         cleaningFee = storedCleaningFee
         cleaningPayment = storedCleaningPayment
         taxRatePercent = storedTaxRatePercent
-
         calendarColor = Color(hex: storedCalendarColorHex) ?? .red
-
         isInitialized = true
     }
 
@@ -1171,21 +1139,16 @@ private struct PropertySettingsView: View {
         storedPropertyName = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
         storedPropertyShortName = propertyShortName.trimmingCharacters(in: .whitespacesAndNewlines)
         storedPropertyAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
-
         storedCleaningFee = cleaningFee
         storedCleaningPayment = cleaningPayment
         storedTaxRatePercent = taxRatePercent
-
         storedCalendarColorHex = calendarColor.toHexString()
-
         propertyName = storedPropertyName
         propertyShortName = storedPropertyShortName
         address = storedPropertyAddress
-
         cleaningFee = storedCleaningFee
         cleaningPayment = storedCleaningPayment
         taxRatePercent = storedTaxRatePercent
-
         calendarColor = Color(hex: storedCalendarColorHex) ?? calendarColor
     }
 
@@ -1227,10 +1190,8 @@ private struct PropertySettingsView: View {
         selectedPhotoItems = []
     }
 
-    // MARK: - 6) View
     var body: some View {
         List {
-
             Section {
                 TextField("Property Name", text: $propertyName)
                     .textInputAutocapitalization(.words)
@@ -1424,6 +1385,11 @@ private struct DataManagementSettingsView: View {
     @State private var exportShareItem: ExportShareItem?
     @State private var exportErrorMessage: String = ""
     @State private var isShowingExportErrorAlert: Bool = false
+    @State private var isShowingExpenseImportPicker: Bool = false
+    @State private var importErrorMessage: String = ""
+    @State private var isShowingImportErrorAlert: Bool = false
+    @State private var importSuccessMessage: String = ""
+    @State private var isShowingImportSuccessAlert: Bool = false
 
     private struct ExportShareItem: Identifiable {
         let id = UUID()
@@ -1440,11 +1406,31 @@ private struct DataManagementSettingsView: View {
         }
     }
 
+    private func importExpensesCSV(from url: URL) {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let importedCount = try ExpensesView.importExpensesCSV(from: url, context: viewContext)
+            importSuccessMessage = importedCount == 1
+                ? "Imported 1 expense record successfully."
+                : "Imported \(importedCount) expense records successfully."
+            isShowingImportSuccessAlert = true
+        } catch {
+            importErrorMessage = error.localizedDescription
+            isShowingImportErrorAlert = true
+        }
+    }
+
     var body: some View {
         List {
             Section {
                 Button {
-                    // Placeholder
                 } label: {
                     Label("Export reservations to CSV", systemImage: "square.and.arrow.up")
                 }
@@ -1462,13 +1448,12 @@ private struct DataManagementSettingsView: View {
 
             Section {
                 Button {
-                    // Placeholder
                 } label: {
                     Label("Import reservations", systemImage: "square.and.arrow.down")
                 }
 
                 Button {
-                    // Placeholder
+                    isShowingExpenseImportPicker = true
                 } label: {
                     Label("Import expenses from CSV", systemImage: "square.and.arrow.down.on.square")
                 }
@@ -1480,13 +1465,11 @@ private struct DataManagementSettingsView: View {
 
             Section {
                 Button(role: .destructive) {
-                    // Placeholder
                 } label: {
                     Label("Delete all reservation data", systemImage: "trash")
                 }
 
                 Button(role: .destructive) {
-                    // Placeholder
                 } label: {
                     Label("Delete all expense data", systemImage: "trash.slash")
                 }
@@ -1500,10 +1483,34 @@ private struct DataManagementSettingsView: View {
         .sheet(item: $exportShareItem) { item in
             ActivityViewSheet(activityItems: [item.url])
         }
+        .fileImporter(
+            isPresented: $isShowingExpenseImportPicker,
+            allowedContentTypes: [.commaSeparatedText, .text],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let selectedURL = urls.first else { return }
+                importExpensesCSV(from: selectedURL)
+            case .failure(let error):
+                importErrorMessage = error.localizedDescription
+                isShowingImportErrorAlert = true
+            }
+        }
         .alert("Export Failed", isPresented: $isShowingExportErrorAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(exportErrorMessage)
+        }
+        .alert("Import Failed", isPresented: $isShowingImportErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(importErrorMessage)
+        }
+        .alert("Import Complete", isPresented: $isShowingImportSuccessAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(importSuccessMessage)
         }
     }
 }
@@ -1707,6 +1714,7 @@ private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
             presentSharingControllerIfNeeded()
         }
 
+
         private func presentSharingControllerIfNeeded() {
             guard !hasPresentedSharingController else {
                 debugLog("Host view already presented sharing controller")
@@ -1731,11 +1739,11 @@ private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
             } else {
                 debugLog("Presenting sharing controller with preparation handler")
                 sharingController = UICloudSharingController(preparationHandler: { _, preparationCompletionHandler in
-                    print("[CloudSharingControllerSheet] Preparation handler entered")
                     let zoneID = CKRecordZone.ID(zoneName: "TeamWorkspaceZone", ownerName: CKCurrentUserDefaultName)
                     let workspaceID = CKRecord.ID(recordName: "primary-workspace", zoneID: zoneID)
                     let container = CKContainer(identifier: CloudKitSharingManager.containerIdentifier)
                     let privateDatabase = container.privateCloudDatabase
+                    print("[CloudSharingControllerSheet] Preparation handler entered")
                     print("[CloudSharingControllerSheet] Preparation handler using workspace ID: \(workspaceID.recordName) in zone \(zoneID.zoneName)")
                     print("[CloudSharingControllerSheet] Preparation handler fetching workspace record from CloudKit")
 
@@ -1792,8 +1800,6 @@ private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
         }
     }
 }
-
-// MARK: - 5) Color helpers (for simple local persistence)
 
 private extension Color {
     init?(hex: String) {

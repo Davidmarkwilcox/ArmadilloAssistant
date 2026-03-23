@@ -41,6 +41,7 @@ struct ExpensesView: View {
 
     struct ExpenseItem: Identifiable {
         let id: UUID
+        let storageID: NSManagedObjectID
         let date: Date
         let property: String
         let category: String
@@ -51,6 +52,7 @@ struct ExpensesView: View {
 
         init(
             id: UUID = UUID(),
+            storageID: NSManagedObjectID,
             date: Date,
             property: String,
             category: String,
@@ -60,6 +62,7 @@ struct ExpensesView: View {
             isReimbursed: Bool
         ) {
             self.id = id
+            self.storageID = storageID
             self.date = date
             self.property = property
             self.category = category
@@ -90,6 +93,29 @@ struct ExpensesView: View {
             switch self {
             case .failedToWriteFile:
                 return "Unable to create the expenses CSV export file."
+            }
+        }
+    }
+
+    enum ExpenseCSVImportError: LocalizedError {
+        case unreadableFile
+        case invalidHeader
+        case invalidDate(row: Int, value: String)
+        case invalidBoolean(row: Int, value: String)
+        case invalidNumber(row: Int, column: String, value: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unreadableFile:
+                return "Unable to read the selected CSV file."
+            case .invalidHeader:
+                return "The selected CSV file does not match the expected Expenses import template."
+            case .invalidDate(let row, let value):
+                return "Invalid Expense Date on row \(row): \(value)"
+            case .invalidBoolean(let row, let value):
+                return "Invalid Reimbursed? value on row \(row): \(value)"
+            case .invalidNumber(let row, let column, let value):
+                return "Invalid numeric value for \(column) on row \(row): \(value)"
             }
         }
     }
@@ -205,9 +231,266 @@ struct ExpensesView: View {
             mileageFormatter.string(from: NSNumber(value: value)) ?? "0"
         }
 
-        private static func csvEscaped(_ value: String) -> String {
+        private nonisolated static func csvEscaped(_ value: String) -> String {
             let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
             return "\"\(escaped)\""
+        }
+    }
+
+    struct ExpenseCSVImporter {
+        static let headers: [String] = [
+            "Expense Type",
+            "Expense Date",
+            "Project",
+            "Category",
+            "Expenser",
+            "Reimbursed?",
+            "Expense Amount",
+            "Mileage",
+            "Mileage Rate",
+            "Reimbursement Amount",
+            "Notes"
+        ]
+
+        private static let dateFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter
+        }()
+
+        private struct ParsedExpenseRow {
+            let expenseType: String
+            let expenseDate: Date
+            let project: String
+            let category: String
+            let expenser: String
+            let reimbursed: Bool
+            let expenseAmount: Double
+            let mileage: Double
+            let mileageRate: Double
+            let reimbursementAmount: Double
+            let notes: String
+        }
+
+        static func importFile(from url: URL, context: NSManagedObjectContext) throws -> Int {
+            let csvText: String
+
+            do {
+                csvText = try String(contentsOf: url, encoding: .utf8)
+            } catch {
+                throw ExpenseCSVImportError.unreadableFile
+            }
+
+            let rows = parseCSVRows(csvText)
+            guard let headerRow = rows.first else {
+                throw ExpenseCSVImportError.invalidHeader
+            }
+
+            let normalizedHeader = normalizedHeaderRow(headerRow)
+            let expectedHeader = normalizedHeaderRow(headers)
+            guard Array(normalizedHeader.prefix(expectedHeader.count)) == expectedHeader else {
+                throw ExpenseCSVImportError.invalidHeader
+            }
+
+            let parsedRows = try rows
+                .dropFirst()
+                .enumerated()
+                .compactMap { offset, row in
+                    try parsedExpenseRow(from: row, rowNumber: offset + 2)
+                }
+
+            if parsedRows.isEmpty {
+                return 0
+            }
+
+            let now = Date()
+            let trimmedProjects = fetchProjectMap(context: context)
+            let trimmedCategories = fetchCategoryMap(context: context)
+
+            for parsedRow in parsedRows {
+                let expense = Expense(context: context)
+                expense.id = UUID()
+                expense.expenseType = parsedRow.expenseType
+                expense.expenseDate = parsedRow.expenseDate
+                expense.project = parsedRow.project
+                expense.category = parsedRow.category
+                expense.expenser = parsedRow.expenser
+                expense.reimbursed = parsedRow.reimbursed
+                expense.expenseAmount = parsedRow.expenseAmount
+                expense.mileage = parsedRow.mileage
+                expense.mileageRate = parsedRow.mileageRate
+                expense.reimbursementAmount = parsedRow.reimbursementAmount
+                expense.notes = parsedRow.notes
+                expense.createdAt = now
+                expense.createdBy = "CSV Import"
+                expense.lastModifiedAt = now
+                expense.lastModifiedBy = "CSV Import"
+                expense.projectRef = trimmedProjects[parsedRow.project.trimmingCharacters(in: .whitespacesAndNewlines)]
+                expense.categoryRef = trimmedCategories[parsedRow.category.trimmingCharacters(in: .whitespacesAndNewlines)]
+            }
+
+            do {
+                try context.save()
+            } catch {
+                context.rollback()
+                throw error
+            }
+
+            return parsedRows.count
+        }
+
+        private static func fetchProjectMap(context: NSManagedObjectContext) -> [String: ExpenseProject] {
+            let request: NSFetchRequest<ExpenseProject> = ExpenseProject.fetchRequest()
+            let projects = (try? context.fetch(request)) ?? []
+            return Dictionary(uniqueKeysWithValues: projects.compactMap { project in
+                guard let name = project.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                    return nil
+                }
+                return (name, project)
+            })
+        }
+
+        private static func fetchCategoryMap(context: NSManagedObjectContext) -> [String: ExpenseCategory] {
+            let request: NSFetchRequest<ExpenseCategory> = ExpenseCategory.fetchRequest()
+            let categories = (try? context.fetch(request)) ?? []
+            return Dictionary(uniqueKeysWithValues: categories.compactMap { category in
+                guard let name = category.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                    return nil
+                }
+                return (name, category)
+            })
+        }
+
+        private static func parsedExpenseRow(from row: [String], rowNumber: Int) throws -> ParsedExpenseRow? {
+            let paddedRow = row + Array(repeating: "", count: max(0, headers.count - row.count))
+            let normalized = Array(paddedRow.prefix(headers.count)).map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let hasAnyValue = normalized.contains { !$0.isEmpty }
+            guard hasAnyValue else { return nil }
+
+            let expenseType = normalized[0].isEmpty ? "Direct Expense" : normalized[0]
+            let expenseDateString = normalized[1]
+            guard let expenseDate = dateFormatter.date(from: expenseDateString) else {
+                throw ExpenseCSVImportError.invalidDate(row: rowNumber, value: expenseDateString)
+            }
+
+            let reimbursed = try parseBoolean(normalized[5], rowNumber: rowNumber)
+            let expenseAmount = try parseNumber(normalized[6], rowNumber: rowNumber, column: "Expense Amount")
+            let mileage = try parseNumber(normalized[7], rowNumber: rowNumber, column: "Mileage")
+            let mileageRate = try parseNumber(normalized[8], rowNumber: rowNumber, column: "Mileage Rate")
+            let reimbursementAmount = normalized[9].isEmpty
+                ? (expenseAmount + (mileage * mileageRate))
+                : try parseNumber(normalized[9], rowNumber: rowNumber, column: "Reimbursement Amount")
+
+            return ParsedExpenseRow(
+                expenseType: expenseType,
+                expenseDate: expenseDate,
+                project: normalized[2],
+                category: normalized[3],
+                expenser: normalized[4],
+                reimbursed: reimbursed,
+                expenseAmount: expenseAmount,
+                mileage: mileage,
+                mileageRate: mileageRate,
+                reimbursementAmount: reimbursementAmount,
+                notes: normalized[10]
+            )
+        }
+
+        private static func parseBoolean(_ value: String, rowNumber: Int) throws -> Bool {
+            if value.isEmpty { return false }
+
+            switch value.lowercased() {
+            case "yes", "y", "true", "1":
+                return true
+            case "no", "n", "false", "0":
+                return false
+            default:
+                throw ExpenseCSVImportError.invalidBoolean(row: rowNumber, value: value)
+            }
+        }
+
+        private static func parseNumber(_ value: String, rowNumber: Int, column: String) throws -> Double {
+            if value.isEmpty { return 0 }
+
+            let sanitized = value
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: ",", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard let parsed = Double(sanitized) else {
+                throw ExpenseCSVImportError.invalidNumber(row: rowNumber, column: column, value: value)
+            }
+
+            return parsed
+        }
+
+        private static func normalizedHeaderRow(_ row: [String]) -> [String] {
+            Array(row.prefix(headers.count)).enumerated().map { index, value in
+                var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if index == 0 {
+                    normalized = normalized.replacingOccurrences(of: "\u{FEFF}", with: "")
+                }
+                return normalized
+            }
+        }
+
+        private static func parseCSVRows(_ text: String) -> [[String]] {
+            let normalizedText = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+            var rows: [[String]] = []
+            var currentRow: [String] = []
+            var currentField: String = ""
+            var isInsideQuotes = false
+
+            let characters = Array(normalizedText)
+            var index = 0
+
+            while index < characters.count {
+                let character = characters[index]
+
+                if isInsideQuotes {
+                    if character == "\"" {
+                        let nextIndex = index + 1
+                        if nextIndex < characters.count, characters[nextIndex] == "\"" {
+                            currentField.append("\"")
+                            index += 1
+                        } else {
+                            isInsideQuotes = false
+                        }
+                    } else {
+                        currentField.append(character)
+                    }
+                } else {
+                    switch character {
+                    case "\"":
+                        isInsideQuotes = true
+                    case ",":
+                        currentRow.append(currentField)
+                        currentField = ""
+                    case "\n":
+                        currentRow.append(currentField)
+                        rows.append(currentRow)
+                        currentRow = []
+                        currentField = ""
+                    default:
+                        currentField.append(character)
+                    }
+                }
+
+                index += 1
+            }
+
+            if !currentField.isEmpty || !currentRow.isEmpty {
+                currentRow.append(currentField)
+                rows.append(currentRow)
+            }
+
+            return rows
         }
     }
 
@@ -241,17 +524,16 @@ struct ExpensesView: View {
 
     @AppStorage("expense_currentMileageRate") private var storedMileageRate: Double = 0.67
 
-    @State private var rangeFilter: ExpenseRangeFilter = .recent30Days
+    @State private var rangeFilter: ExpenseRangeFilter? = .recent30Days
     @State private var reimbursedOnly: Bool = false
     @State private var selectedExpensers: Set<Expenser> = []
 
     @State private var isShowingExpenserPicker: Bool = false
     @State private var isShowingNewExpenseSheet: Bool = false
-    @State private var isShowingEditExpenseSheet: Bool = false
+    @State private var editingExpenseItem: ExpenseItem?
     @State private var selectedExpenseID: UUID?
     @State private var draftExpense: ExpenseItem?
-    @State private var editDraft: ExpenseEditorDraft = ExpenseEditorDraft()
-    @State private var editingExpenseID: UUID?
+    @State private var editingExpenseID: NSManagedObjectID?
     @State private var pendingSwipeDeleteExpense: ExpenseItem?
     @State private var isShowingDetails: Bool = false
 
@@ -269,6 +551,7 @@ struct ExpensesView: View {
         storedExpenses.map { expense in
             ExpenseItem(
                 id: expense.id ?? UUID(),
+                storageID: expense.objectID,
                 date: expense.expenseDate ?? Date(),
                 property: expense.project ?? "",
                 category: expense.category ?? "",
@@ -291,6 +574,8 @@ struct ExpensesView: View {
                     return expense.date >= cutoffDate
                 case .currentYear:
                     return Calendar.current.isDate(expense.date, equalTo: Date(), toGranularity: .year)
+                case nil:
+                    return true
                 }
             }
             .filter { !reimbursedOnly || $0.isReimbursed }
@@ -305,6 +590,10 @@ struct ExpensesView: View {
 
     static func makeExpensesCSVExportFile(context: NSManagedObjectContext) throws -> URL {
         try ExpenseCSVExporter.writeExportFile(context: context)
+    }
+
+    static func importExpensesCSV(from url: URL, context: NSManagedObjectContext) throws -> Int {
+        try ExpenseCSVImporter.importFile(from: url, context: context)
     }
 
     private func refreshExpenseData() {
@@ -337,7 +626,7 @@ struct ExpensesView: View {
     }
 
     private func makeEditDraft(from expenseItem: ExpenseItem) -> ExpenseEditorDraft {
-        guard let storedExpense = storedExpenses.first(where: { $0.id == expenseItem.id }) else {
+        guard let storedExpense = storedExpenses.first(where: { $0.objectID == expenseItem.storageID }) else {
             return ExpenseEditorDraft(
                 expenseType: "Direct Expense",
                 expenseDate: expenseItem.date,
@@ -355,8 +644,8 @@ struct ExpensesView: View {
         return ExpenseEditorDraft(
             expenseType: storedExpense.expenseType ?? "Direct Expense",
             expenseDate: storedExpense.expenseDate ?? expenseItem.date,
-            projectName: storedExpense.project ?? expenseItem.property,
-            categoryName: storedExpense.category ?? expenseItem.category,
+            projectName: (storedExpense.project ?? expenseItem.property).trimmingCharacters(in: .whitespacesAndNewlines),
+            categoryName: (storedExpense.category ?? expenseItem.category).trimmingCharacters(in: .whitespacesAndNewlines),
             expenser: expenserValue(from: storedExpense.expenser),
             isReimbursed: storedExpense.reimbursed,
             expenseAmountText: storedExpense.expenseAmount == 0 ? "" : String(format: "%.2f", storedExpense.expenseAmount),
@@ -400,8 +689,8 @@ struct ExpensesView: View {
         }
     }
 
-    private func updateExpense(from draft: ExpenseEditorDraft, expenseID: UUID) {
-        guard let storedExpense = storedExpenses.first(where: { $0.id == expenseID }) else { return }
+    private func updateExpense(from draft: ExpenseEditorDraft, expenseID: NSManagedObjectID) {
+        guard let storedExpense = storedExpenses.first(where: { $0.objectID == expenseID }) else { return }
 
         let now = Date()
         let expenseAmount = decimalValue(from: draft.expenseAmountText)
@@ -433,10 +722,11 @@ struct ExpensesView: View {
     }
 
     private func deleteExpense(_ expenseItem: ExpenseItem) {
-        guard let storedExpense = storedExpenses.first(where: { $0.id == expenseItem.id }) else {
+        guard let storedExpense = storedExpenses.first(where: { $0.objectID == expenseItem.storageID }) else {
             selectedExpenseID = nil
             draftExpense = nil
             editingExpenseID = nil
+            editingExpenseItem = nil
             pendingSwipeDeleteExpense = nil
             isShowingDetails = false
             return
@@ -449,6 +739,7 @@ struct ExpensesView: View {
             selectedExpenseID = nil
             draftExpense = nil
             editingExpenseID = nil
+            editingExpenseItem = nil
             pendingSwipeDeleteExpense = nil
             isShowingDetails = false
         } catch {
@@ -457,12 +748,9 @@ struct ExpensesView: View {
     }
 
     private func beginEditing(_ expenseItem: ExpenseItem) {
-        editDraft = makeEditDraft(from: expenseItem)
-        editingExpenseID = expenseItem.id
+        editingExpenseID = expenseItem.storageID
+        editingExpenseItem = expenseItem
         isShowingDetails = false
-        DispatchQueue.main.async {
-            isShowingEditExpenseSheet = true
-        }
     }
 
     private func filterChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -518,16 +806,20 @@ struct ExpensesView: View {
                                         title: ExpenseRangeFilter.recent30Days.rawValue,
                                         isSelected: rangeFilter == .recent30Days
                                     ) {
-                                        rangeFilter = .recent30Days
+                                        rangeFilter = (rangeFilter == .recent30Days) ? nil : .recent30Days
                                     }
 
                                     filterChip(
                                         title: ExpenseRangeFilter.currentYear.rawValue,
                                         isSelected: rangeFilter == .currentYear
                                     ) {
-                                        rangeFilter = .currentYear
+                                        rangeFilter = (rangeFilter == .currentYear) ? nil : .currentYear
                                     }
                                 }
+
+                                Text(rangeFilter == nil ? "All Expenses" : "")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
 
                             Toggle(isOn: $reimbursedOnly) {
@@ -603,7 +895,7 @@ struct ExpensesView: View {
                                     selectExpense(expense)
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    if storedExpenses.contains(where: { $0.id == expense.id }) {
+                                    if storedExpenses.contains(where: { $0.objectID == expense.storageID }) {
                                         Button(role: .destructive) {
                                             pendingSwipeDeleteExpense = expense
                                         } label: {
@@ -667,19 +959,22 @@ struct ExpensesView: View {
                     .navigationBarTitleDisplayMode(.inline)
                 }
             }
-            .sheet(isPresented: $isShowingEditExpenseSheet) {
+            .sheet(item: $editingExpenseItem, onDismiss: {
+                editingExpenseID = nil
+                editingExpenseItem = nil
+            }) { expenseItem in
                 NavigationStack {
                     ExpenseEditorSheet(
-                        draft: editDraft,
+                        draft: makeEditDraft(from: expenseItem),
                         projects: activeProjects.compactMap(\.name),
                         categories: activeCategories.compactMap(\.name)
                     ) { draft in
-                        if let editingExpenseID {
-                            updateExpense(from: draft, expenseID: editingExpenseID)
-                        }
-                        isShowingEditExpenseSheet = false
+                        updateExpense(from: draft, expenseID: expenseItem.storageID)
+                        editingExpenseID = nil
+                        editingExpenseItem = nil
                     } onCancel: {
-                        isShowingEditExpenseSheet = false
+                        editingExpenseID = nil
+                        editingExpenseItem = nil
                     }
                     .navigationTitle("Edit Expense")
                     .navigationBarTitleDisplayMode(.inline)
@@ -702,8 +997,8 @@ struct ExpensesView: View {
                     if let expense = draftExpense {
                         ExpenseDetailView(
                             expense: expense,
-                            canEdit: storedExpenses.contains(where: { $0.id == expense.id }),
-                            canDelete: storedExpenses.contains(where: { $0.id == expense.id }),
+                            canEdit: storedExpenses.contains(where: { $0.objectID == expense.storageID }),
+                            canDelete: storedExpenses.contains(where: { $0.objectID == expense.storageID }),
                             onEdit: {
                                 beginEditing(expense)
                             },
@@ -776,8 +1071,36 @@ private struct ExpenseEditorSheet: View {
         case notes
     }
 
+    private var expenseTypeOptions: [String] {
+        var options = ["Direct Expense", "Mileage Expense", "Combined Expense"]
+        let trimmedCurrent = draft.expenseType.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCurrent.isEmpty && !options.contains(trimmedCurrent) {
+            options.append(trimmedCurrent)
+        }
+        return options
+    }
+
+    private var projectOptions: [String] {
+        let trimmedCurrent = draft.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = projects.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if trimmedCurrent.isEmpty || base.contains(trimmedCurrent) {
+            return base
+        }
+        return [trimmedCurrent] + base
+    }
+
+    private var categoryOptions: [String] {
+        let trimmedCurrent = draft.categoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = categories.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if trimmedCurrent.isEmpty || base.contains(trimmedCurrent) {
+            return base
+        }
+        return [trimmedCurrent] + base
+    }
+
     private func normalizeMileageRateAfterMileageEditing() {
-        guard draft.expenseType == "Mileage" else { return }
+        let normalizedExpenseType = draft.expenseType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedExpenseType == "Mileage" || normalizedExpenseType == "Mileage Expense" else { return }
         let trimmedMileage = draft.mileageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedMileage.isEmpty, trimmedMileage != lastCommittedMileageText else { return }
 
@@ -813,20 +1136,21 @@ private struct ExpenseEditorSheet: View {
         Form {
             Section("Basics") {
                 Picker("Expense Type", selection: $draft.expenseType) {
-                    Text("Direct Expense").tag("Direct Expense")
-                    Text("Mileage").tag("Mileage")
+                    ForEach(expenseTypeOptions, id: \.self) { expenseType in
+                        Text(expenseType).tag(expenseType)
+                    }
                 }
 
                 DatePicker("Expense Date", selection: $draft.expenseDate, displayedComponents: .date)
 
                 Picker("Project", selection: $draft.projectName) {
-                    ForEach(projects, id: \.self) { project in
+                    ForEach(projectOptions, id: \.self) { project in
                         Text(project).tag(project)
                     }
                 }
 
                 Picker("Category", selection: $draft.categoryName) {
-                    ForEach(categories, id: \.self) { category in
+                    ForEach(categoryOptions, id: \.self) { category in
                         Text(category).tag(category)
                     }
                 }
