@@ -120,6 +120,17 @@ struct ExpensesView: View {
         }
     }
 
+    enum ExpenseBulkDeleteError: LocalizedError {
+        case failedToDelete
+
+        var errorDescription: String? {
+            switch self {
+            case .failedToDelete:
+                return "Unable to delete the stored expense records."
+            }
+        }
+    }
+
     struct ExpenseCSVExporter {
         private static let headers: [String] = [
             "Expense Type",
@@ -594,6 +605,30 @@ struct ExpensesView: View {
 
     static func importExpensesCSV(from url: URL, context: NSManagedObjectContext) throws -> Int {
         try ExpenseCSVImporter.importFile(from: url, context: context)
+    }
+
+    static func deleteAllExpenseData(context: NSManagedObjectContext) throws -> Int {
+        let fetchRequest: NSFetchRequest<NSFetchRequestResult> = Expense.fetchRequest()
+        let countRequest: NSFetchRequest<Expense> = Expense.fetchRequest()
+        let existingCount = try context.count(for: countRequest)
+
+        guard existingCount > 0 else { return 0 }
+
+        let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+        deleteRequest.resultType = .resultTypeObjectIDs
+
+        do {
+            let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+            if let deletedObjectIDs = result?.result as? [NSManagedObjectID], !deletedObjectIDs.isEmpty {
+                let changes: [AnyHashable: Any] = [NSDeletedObjectsKey: deletedObjectIDs]
+                NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [context])
+            } else {
+                context.refreshAllObjects()
+            }
+            return existingCount
+        } catch {
+            throw ExpenseBulkDeleteError.failedToDelete
+        }
     }
 
     private func refreshExpenseData() {

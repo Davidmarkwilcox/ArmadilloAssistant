@@ -1390,6 +1390,11 @@ private struct DataManagementSettingsView: View {
     @State private var isShowingImportErrorAlert: Bool = false
     @State private var importSuccessMessage: String = ""
     @State private var isShowingImportSuccessAlert: Bool = false
+    @State private var isShowingDeleteAllExpenseConfirmation: Bool = false
+    @State private var deleteExpenseErrorMessage: String = ""
+    @State private var isShowingDeleteExpenseErrorAlert: Bool = false
+    @State private var deleteExpenseSuccessMessage: String = ""
+    @State private var isShowingDeleteExpenseSuccessAlert: Bool = false
 
     private struct ExportShareItem: Identifiable {
         let id = UUID()
@@ -1424,6 +1429,19 @@ private struct DataManagementSettingsView: View {
         } catch {
             importErrorMessage = error.localizedDescription
             isShowingImportErrorAlert = true
+        }
+    }
+
+    private func deleteAllExpenseData() {
+        do {
+            let deletedCount = try ExpensesView.deleteAllExpenseData(context: viewContext)
+            deleteExpenseSuccessMessage = deletedCount == 1
+                ? "Deleted 1 expense record successfully."
+                : "Deleted \(deletedCount) expense records successfully."
+            isShowingDeleteExpenseSuccessAlert = true
+        } catch {
+            deleteExpenseErrorMessage = error.localizedDescription
+            isShowingDeleteExpenseErrorAlert = true
         }
     }
 
@@ -1470,13 +1488,14 @@ private struct DataManagementSettingsView: View {
                 }
 
                 Button(role: .destructive) {
+                    isShowingDeleteAllExpenseConfirmation = true
                 } label: {
                     Label("Delete all expense data", systemImage: "trash.slash")
                 }
             } header: {
                 Text("Deletion")
             } footer: {
-                Text("Prototype only — we’ll add confirmation and actual data operations later.")
+                Text("Deleting all expense data removes all stored expense records. Expense settings such as projects, categories, and mileage rate are retained.")
             }
         }
         .navigationTitle("Data Management")
@@ -1511,6 +1530,24 @@ private struct DataManagementSettingsView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(importSuccessMessage)
+        }
+        .alert("Delete All Expense Data?", isPresented: $isShowingDeleteAllExpenseConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete All", role: .destructive) {
+                deleteAllExpenseData()
+            }
+        } message: {
+            Text("This will permanently delete all expense records. This action cannot be undone.")
+        }
+        .alert("Deletion Failed", isPresented: $isShowingDeleteExpenseErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteExpenseErrorMessage)
+        }
+        .alert("Deletion Complete", isPresented: $isShowingDeleteExpenseSuccessAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteExpenseSuccessMessage)
         }
     }
 }
