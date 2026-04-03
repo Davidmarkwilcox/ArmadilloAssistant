@@ -1073,14 +1073,14 @@ private struct ProfileSettingsView: View {
 }
 
 private struct PropertySettingsView: View {
-    @AppStorage("property_name") private var storedPropertyName: String = ""
-    @AppStorage("property_shortName") private var storedPropertyShortName: String = ""
-    @AppStorage("property_address") private var storedPropertyAddress: String = ""
-
-    @AppStorage("property_cleaningFee") private var storedCleaningFee: Double = 0
-    @AppStorage("property_cleaningPayment") private var storedCleaningPayment: Double = 0
-    @AppStorage("property_taxRatePercent") private var storedTaxRatePercent: Double = 0
-    @AppStorage("property_calendarColorHex") private var storedCalendarColorHex: String = "#B31B1B"
+    @AppStorage("property_name") private var legacyStoredPropertyName: String = ""
+    @AppStorage("property_shortName") private var legacyStoredPropertyShortName: String = ""
+    @AppStorage("property_address") private var legacyStoredPropertyAddress: String = ""
+    @AppStorage("property_cleaningFee") private var legacyStoredCleaningFee: Double = 0
+    @AppStorage("property_cleaningPayment") private var legacyStoredCleaningPayment: Double = 0
+    @AppStorage("property_taxRatePercent") private var legacyStoredTaxRatePercent: Double = 0
+    @AppStorage("property_calendarColorHex") private var legacyStoredCalendarColorHex: String = "#B31B1B"
+    @AppStorage("property_photoBase64") private var legacyStoredPropertyPhotoBase64: String = ""
 
     @State private var propertyName: String = ""
     @State private var propertyShortName: String = ""
@@ -1094,6 +1094,11 @@ private struct PropertySettingsView: View {
     @State private var defaultPhotoID: UUID? = nil
     @State private var isInitialized: Bool = false
     @State private var showUnsavedAlert: Bool = false
+    @State private var pendingSelectionAfterAlert: UUID? = nil
+
+    @State private var properties: [PropertyRecord] = []
+    @State private var selectedPropertyID: UUID? = nil
+    @State private var selectedPropertyPickerID: UUID? = nil
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -1104,15 +1109,101 @@ private struct PropertySettingsView: View {
         var uiImage: UIImage? { UIImage(data: imageData) }
     }
 
+    private struct PropertyRecord: Identifiable, Codable, Equatable {
+        var id: UUID
+        var name: String
+        var shortName: String
+        var address: String
+        var cleaningFee: Double
+        var cleaningPayment: Double
+        var taxRatePercent: Double
+        var calendarColorHex: String
+        var legacyPhotoBase64: String
+        var createdAt: Date
+        var updatedAt: Date
+
+        static func emptyDefault() -> PropertyRecord {
+            let now = Date()
+            return PropertyRecord(
+                id: UUID(),
+                name: "",
+                shortName: "",
+                address: "",
+                cleaningFee: 0,
+                cleaningPayment: 0,
+                taxRatePercent: 0,
+                calendarColorHex: "#B31B1B",
+                legacyPhotoBase64: "",
+                createdAt: now,
+                updatedAt: now
+            )
+        }
+    }
+
+    private enum PropertyStore {
+        private static let fileName = "properties.json"
+
+        private static var fileURL: URL {
+            let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let folderURL = baseURL.appendingPathComponent("ArmadilloAssistant", isDirectory: true)
+
+            if !FileManager.default.fileExists(atPath: folderURL.path) {
+                try? FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+            }
+
+            return folderURL.appendingPathComponent(fileName)
+        }
+
+        static func load() -> [PropertyRecord] {
+            let url = fileURL
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                return []
+            }
+
+            do {
+                let data = try Data(contentsOf: url)
+                return try JSONDecoder().decode([PropertyRecord].self, from: data)
+            } catch {
+                print("[PropertySettingsView] Failed to load properties: \(error.localizedDescription)")
+                return []
+            }
+        }
+
+        static func save(_ properties: [PropertyRecord]) {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(properties)
+                try data.write(to: fileURL, options: .atomic)
+            } catch {
+                print("[PropertySettingsView] Failed to save properties: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private var hasUnsavedChanges: Bool {
         guard isInitialized else { return false }
-        return propertyName != storedPropertyName
-            || propertyShortName != storedPropertyShortName
-            || address != storedPropertyAddress
-            || cleaningFee != storedCleaningFee
-            || cleaningPayment != storedCleaningPayment
-            || taxRatePercent != storedTaxRatePercent
-            || calendarColor.toHexString() != storedCalendarColorHex
+
+        guard let record = currentStoredRecord else {
+            return !propertyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !propertyShortName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || cleaningFee != 0
+                || cleaningPayment != 0
+                || taxRatePercent != 0
+                || calendarColor.toHexString() != "#B31B1B"
+                || !photos.isEmpty
+        }
+
+        return propertyName != record.name
+            || propertyShortName != record.shortName
+            || address != record.address
+            || cleaningFee != record.cleaningFee
+            || cleaningPayment != record.cleaningPayment
+            || taxRatePercent != record.taxRatePercent
+            || calendarColor.toHexString() != record.calendarColorHex
+            || defaultPhotoBase64String() != record.legacyPhotoBase64
     }
 
     private var mapsURL: URL? {
@@ -1123,40 +1214,225 @@ private struct PropertySettingsView: View {
         return comps.url
     }
 
-    private func loadFromStorageIfNeeded() {
-        guard !isInitialized else { return }
-        propertyName = storedPropertyName
-        propertyShortName = storedPropertyShortName
-        address = storedPropertyAddress
-        cleaningFee = storedCleaningFee
-        cleaningPayment = storedCleaningPayment
-        taxRatePercent = storedTaxRatePercent
-        calendarColor = Color(hex: storedCalendarColorHex) ?? .red
+    private var selectedPropertyIndex: Int? {
+        guard let id = selectedPropertyID else { return nil }
+        return properties.firstIndex(where: { $0.id == id })
+    }
+
+    private var currentStoredRecord: PropertyRecord? {
+        guard let selectedPropertyIndex else { return nil }
+        return properties[selectedPropertyIndex]
+    }
+
+    private var selectedPropertyDisplayName: String {
+        guard let currentStoredRecord else { return "New Property" }
+        let trimmedName = currentStoredRecord.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedName.isEmpty {
+            return trimmedName
+        }
+        return "Untitled Property"
+    }
+
+    private func loadPropertiesIfNeeded() {
+        guard properties.isEmpty else { return }
+
+        var loadedProperties = PropertyStore.load()
+
+        if loadedProperties.isEmpty,
+           hasLegacyStoredPropertyData() {
+            let migratedRecord = buildLegacyPropertyRecord()
+            loadedProperties = [migratedRecord]
+            PropertyStore.save(loadedProperties)
+        }
+
+        properties = loadedProperties.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+
+        if let firstID = properties.first?.id {
+            loadEditor(from: firstID)
+        } else {
+            startNewPropertyDraft()
+        }
+
         isInitialized = true
     }
 
+    private func hasLegacyStoredPropertyData() -> Bool {
+        !legacyStoredPropertyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !legacyStoredPropertyShortName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !legacyStoredPropertyAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || legacyStoredCleaningFee != 0
+            || legacyStoredCleaningPayment != 0
+            || legacyStoredTaxRatePercent != 0
+            || legacyStoredCalendarColorHex.trimmingCharacters(in: .whitespacesAndNewlines) != "#B31B1B"
+            || !legacyStoredPropertyPhotoBase64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func buildLegacyPropertyRecord() -> PropertyRecord {
+        let now = Date()
+        return PropertyRecord(
+            id: UUID(),
+            name: legacyStoredPropertyName.trimmingCharacters(in: .whitespacesAndNewlines),
+            shortName: legacyStoredPropertyShortName.trimmingCharacters(in: .whitespacesAndNewlines),
+            address: legacyStoredPropertyAddress.trimmingCharacters(in: .whitespacesAndNewlines),
+            cleaningFee: legacyStoredCleaningFee,
+            cleaningPayment: legacyStoredCleaningPayment,
+            taxRatePercent: legacyStoredTaxRatePercent,
+            calendarColorHex: legacyStoredCalendarColorHex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "#B31B1B" : legacyStoredCalendarColorHex,
+            legacyPhotoBase64: legacyStoredPropertyPhotoBase64,
+            createdAt: now,
+            updatedAt: now
+        )
+    }
+
+    private func clearLegacyStoredPropertyData() {
+        legacyStoredPropertyName = ""
+        legacyStoredPropertyShortName = ""
+        legacyStoredPropertyAddress = ""
+        legacyStoredCleaningFee = 0
+        legacyStoredCleaningPayment = 0
+        legacyStoredTaxRatePercent = 0
+        legacyStoredCalendarColorHex = "#B31B1B"
+        legacyStoredPropertyPhotoBase64 = ""
+    }
+
+    private func startNewPropertyDraft() {
+        selectedPropertyID = nil
+        selectedPropertyPickerID = nil
+        propertyName = ""
+        propertyShortName = ""
+        address = ""
+        cleaningFee = 0
+        cleaningPayment = 0
+        taxRatePercent = 0
+        calendarColor = Color(hex: "#B31B1B") ?? .red
+        photos = []
+        defaultPhotoID = nil
+    }
+
+    private func loadEditor(from propertyID: UUID) {
+        guard let record = properties.first(where: { $0.id == propertyID }) else { return }
+        selectedPropertyID = record.id
+        selectedPropertyPickerID = record.id
+        propertyName = record.name
+        propertyShortName = record.shortName
+        address = record.address
+        cleaningFee = record.cleaningFee
+        cleaningPayment = record.cleaningPayment
+        taxRatePercent = record.taxRatePercent
+        calendarColor = Color(hex: record.calendarColorHex) ?? .red
+
+        if let data = Data(base64Encoded: record.legacyPhotoBase64.trimmingCharacters(in: .whitespacesAndNewlines)),
+           !record.legacyPhotoBase64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let migratedPhoto = PropertyPhoto(id: UUID(), imageData: data)
+            photos = [migratedPhoto]
+            defaultPhotoID = migratedPhoto.id
+        } else {
+            photos = []
+            defaultPhotoID = nil
+        }
+    }
+
     private func save() {
-        storedPropertyName = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
-        storedPropertyShortName = propertyShortName.trimmingCharacters(in: .whitespacesAndNewlines)
-        storedPropertyAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        storedCleaningFee = cleaningFee
-        storedCleaningPayment = cleaningPayment
-        storedTaxRatePercent = taxRatePercent
-        storedCalendarColorHex = calendarColor.toHexString()
-        propertyName = storedPropertyName
-        propertyShortName = storedPropertyShortName
-        address = storedPropertyAddress
-        cleaningFee = storedCleaningFee
-        cleaningPayment = storedCleaningPayment
-        taxRatePercent = storedTaxRatePercent
-        calendarColor = Color(hex: storedCalendarColorHex) ?? calendarColor
+        let trimmedName = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedShortName = propertyShortName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let now = Date()
+
+        if let selectedPropertyIndex {
+            var record = properties[selectedPropertyIndex]
+            record.name = trimmedName
+            record.shortName = trimmedShortName
+            record.address = trimmedAddress
+            record.cleaningFee = cleaningFee
+            record.cleaningPayment = cleaningPayment
+            record.taxRatePercent = taxRatePercent
+            record.calendarColorHex = calendarColor.toHexString()
+            record.legacyPhotoBase64 = defaultPhotoBase64String()
+            record.updatedAt = now
+            properties[selectedPropertyIndex] = record
+            selectedPropertyID = record.id
+        } else {
+            let newRecord = PropertyRecord(
+                id: UUID(),
+                name: trimmedName,
+                shortName: trimmedShortName,
+                address: trimmedAddress,
+                cleaningFee: cleaningFee,
+                cleaningPayment: cleaningPayment,
+                taxRatePercent: taxRatePercent,
+                calendarColorHex: calendarColor.toHexString(),
+                legacyPhotoBase64: defaultPhotoBase64String(),
+                createdAt: now,
+                updatedAt: now
+            )
+            properties.append(newRecord)
+            selectedPropertyID = newRecord.id
+        }
+
+        persistProperties()
+        clearLegacyStoredPropertyData()
+
+        if let selectedPropertyID {
+            loadEditor(from: selectedPropertyID)
+        }
+    }
+
+    private func defaultPhotoBase64String() -> String {
+        guard let defaultPhotoID,
+              let defaultPhoto = photos.first(where: { $0.id == defaultPhotoID }) else {
+            return ""
+        }
+        return defaultPhoto.imageData.base64EncodedString()
+    }
+
+    private func persistProperties() {
+        properties.sort {
+            let lhs = $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rhs = $1.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        PropertyStore.save(properties)
+    }
+
+    private func confirmSelectionChange(to propertyID: UUID) {
+        if hasUnsavedChanges {
+            pendingSelectionAfterAlert = propertyID
+            showUnsavedAlert = true
+        } else {
+            loadEditor(from: propertyID)
+        }
+    }
+
+    private func addNewPropertyTapped() {
+        if hasUnsavedChanges {
+            pendingSelectionAfterAlert = nil
+            showUnsavedAlert = true
+        } else {
+            startNewPropertyDraft()
+        }
     }
 
     private func backTapped() {
         if hasUnsavedChanges {
+            pendingSelectionAfterAlert = nil
             showUnsavedAlert = true
         } else {
             dismiss()
+        }
+    }
+
+    private func deleteSelectedProperty() {
+        guard let selectedPropertyID else { return }
+        properties.removeAll { $0.id == selectedPropertyID }
+        persistProperties()
+
+        if let firstID = properties.first?.id {
+            loadEditor(from: firstID)
+        } else {
+            clearLegacyStoredPropertyData()
+            startNewPropertyDraft()
         }
     }
 
@@ -1192,6 +1468,57 @@ private struct PropertySettingsView: View {
 
     var body: some View {
         List {
+            Section {
+                if properties.isEmpty {
+                    Text("No saved properties yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    let workingPropertySelection = Binding<UUID?>(
+                        get: { selectedPropertyPickerID },
+                        set: { newValue in
+                            guard let newValue else {
+                                startNewPropertyDraft()
+                                return
+                            }
+                            confirmSelectionChange(to: newValue)
+                        }
+                    )
+
+                    Picker("Working Property", selection: workingPropertySelection) {
+                        ForEach(properties) { property in
+                            Text(property.name.isEmpty ? "Untitled Property" : property.name)
+                                .tag(Optional(property.id))
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Currently Editing")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text(selectedPropertyDisplayName)
+                    }
+                }
+
+                Button {
+                    addNewPropertyTapped()
+                } label: {
+                    Label("Add New Property", systemImage: "plus.circle")
+                }
+
+                if selectedPropertyID != nil {
+                    Button(role: .destructive) {
+                        deleteSelectedProperty()
+                    } label: {
+                        Label("Delete Selected Property", systemImage: "trash")
+                    }
+                }
+            } header: {
+                Text("Saved Properties")
+            } footer: {
+                Text("The Working Property picker determines which saved property record is loaded into the editor below. Legacy single-property Settings data is migrated into this list the first time it is found.")
+            }
             Section {
                 TextField("Property Name", text: $propertyName)
                     .textInputAutocapitalization(.words)
@@ -1351,30 +1678,41 @@ private struct PropertySettingsView: View {
                 Button("Save") {
                     save()
                 }
-                .disabled(!hasUnsavedChanges)
+                .disabled(propertyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasUnsavedChanges)
             }
         }
         .alert("Unsaved Changes", isPresented: $showUnsavedAlert) {
             Button("Save") {
                 save()
-                dismiss()
+                if let pendingSelectionAfterAlert {
+                    loadEditor(from: pendingSelectionAfterAlert)
+                    self.pendingSelectionAfterAlert = nil
+                } else {
+                    dismiss()
+                }
             }
             Button("Discard Changes", role: .destructive) {
-                propertyName = storedPropertyName
-                propertyShortName = storedPropertyShortName
-                address = storedPropertyAddress
-                cleaningFee = storedCleaningFee
-                cleaningPayment = storedCleaningPayment
-                taxRatePercent = storedTaxRatePercent
-                calendarColor = Color(hex: storedCalendarColorHex) ?? calendarColor
-                dismiss()
+                if let pendingSelectionAfterAlert {
+                    loadEditor(from: pendingSelectionAfterAlert)
+                    self.pendingSelectionAfterAlert = nil
+                } else if let selectedPropertyID {
+                    loadEditor(from: selectedPropertyID)
+                    dismiss()
+                } else {
+                    startNewPropertyDraft()
+                    dismiss()
+                }
             }
-            Button("Cancel", role: .cancel) { }
+            Button("Cancel", role: .cancel) {
+                pendingSelectionAfterAlert = nil
+                selectedPropertyPickerID = selectedPropertyID
+            }
         } message: {
             Text("You have unsaved property changes. Save before leaving?")
         }
         .onAppear {
-            loadFromStorageIfNeeded()
+            loadPropertiesIfNeeded()
+            selectedPropertyPickerID = selectedPropertyID
         }
     }
 }
@@ -1662,7 +2000,7 @@ private struct ActivityViewSheet: UIViewControllerRepresentable {
 
 private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
     let share: CKShare?
-    private let debugEnabled: Bool = true
+    private let debugEnabled: Bool = false
 
     private func debugLog(_ message: String) {
         guard debugEnabled else { return }
@@ -1774,59 +2112,9 @@ private struct CloudSharingControllerSheet: UIViewControllerRepresentable {
                 debugLog("Presenting sharing controller for existing share \(share.recordID.recordName)")
                 sharingController = UICloudSharingController(share: share, container: container)
             } else {
-                debugLog("Presenting sharing controller with preparation handler")
-                sharingController = UICloudSharingController(preparationHandler: { _, preparationCompletionHandler in
-                    let zoneID = CKRecordZone.ID(zoneName: "TeamWorkspaceZone", ownerName: CKCurrentUserDefaultName)
-                    let workspaceID = CKRecord.ID(recordName: "primary-workspace", zoneID: zoneID)
-                    let container = CKContainer(identifier: CloudKitSharingManager.containerIdentifier)
-                    let privateDatabase = container.privateCloudDatabase
-                    print("[CloudSharingControllerSheet] Preparation handler entered")
-                    print("[CloudSharingControllerSheet] Preparation handler using workspace ID: \(workspaceID.recordName) in zone \(zoneID.zoneName)")
-                    print("[CloudSharingControllerSheet] Preparation handler fetching workspace record from CloudKit")
-
-                    privateDatabase.fetch(withRecordID: workspaceID) { record, error in
-                        if let error {
-                            DispatchQueue.main.async {
-                                print("[CloudSharingControllerSheet] Preparation fetch failed: \(error.localizedDescription)")
-                                preparationCompletionHandler(nil, container, error)
-                            }
-                            return
-                        }
-
-                        guard let workspaceRecord = record else {
-                            let error = NSError(
-                                domain: "CloudSharingControllerSheet",
-                                code: -100,
-                                userInfo: [NSLocalizedDescriptionKey: "Workspace record was not found during share preparation"]
-                            )
-                            DispatchQueue.main.async {
-                                print("[CloudSharingControllerSheet] Preparation fetch returned no workspace record")
-                                preparationCompletionHandler(nil, container, error)
-                            }
-                            return
-                        }
-
-                        print("[CloudSharingControllerSheet] Preparation handler fetched workspace record successfully")
-                        let share = CKShare(rootRecord: workspaceRecord)
-                        share[CKShare.SystemFieldKey.title] = "Armadillo Assistant Team" as CKRecordValue
-                        print("[CloudSharingControllerSheet] Preparation handler created CKShare \(share.recordID.recordName)")
-                        let operation = CKModifyRecordsOperation(recordsToSave: [workspaceRecord, share], recordIDsToDelete: nil)
-                        print("[CloudSharingControllerSheet] Preparation handler submitting workspace+share save operation")
-                        operation.modifyRecordsResultBlock = { result in
-                            DispatchQueue.main.async {
-                                switch result {
-                                case .success:
-                                    print("[CloudSharingControllerSheet] Preparation handler saved share \(share.recordID.recordName)")
-                                    preparationCompletionHandler(share, container, nil)
-                                case .failure(let error):
-                                    print("[CloudSharingControllerSheet] Preparation handler failed: \(error.localizedDescription)")
-                                    preparationCompletionHandler(nil, container, error)
-                                }
-                            }
-                        }
-                        privateDatabase.add(operation)
-                    }
-                })
+                debugLog("No existing share is available for presentation")
+                hasPresentedSharingController = false
+                return
             }
 
             sharingController.delegate = coordinator
