@@ -1026,15 +1026,17 @@ private struct ProfileSettingsView: View {
                 Button {
                     backTapped()
                 } label: {
-                    Label("Back", systemImage: "chevron.left")
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .semibold))
                 }
+                .tint(.white)
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Save") {
                     save()
                 }
+                .foregroundColor(.white)
                 .disabled(!hasUnsavedChanges)
             }
         }
@@ -1669,15 +1671,17 @@ private struct PropertySettingsView: View {
                 Button {
                     backTapped()
                 } label: {
-                    Label("Back", systemImage: "chevron.left")
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 20, weight: .semibold))
                 }
+                .tint(.white)
             }
 
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Save") {
                     save()
                 }
+                .foregroundColor(.white)
                 .disabled(propertyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasUnsavedChanges)
             }
         }
