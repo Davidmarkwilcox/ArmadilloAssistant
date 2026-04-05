@@ -7,19 +7,23 @@
 // - Selection: selected row is visibly highlighted and shows a checkmark; tapping opens a detail sheet.
 
 import SwiftUI
+import CoreData
 
 // MARK: - 1) BookingsView
 
 struct BookingsView: View {
+    @Environment(\.managedObjectContext) private var viewContext
 
     // MARK: - 1.1 Models (Prototype)
 
-    enum Property: String, CaseIterable, Identifiable, Hashable {
-        case barndo = "Barndo"
-        case main = "Main"
-        case washington = "Washington"
-
-        var id: String { rawValue }
+    struct PropertyOption: Identifiable, Hashable {
+        let id: UUID
+        let name: String
+        let pricePerNightDefault: Double
+        let cleaningFeeDefault: Double
+        let cleaningPaymentDefault: Double
+        let serviceFeeDefault: Double
+        let taxRateDefault: Double
     }
 
     enum ReservationStatus: String, CaseIterable, Identifiable, Hashable {
@@ -36,19 +40,38 @@ struct BookingsView: View {
 
     struct Reservation: Identifiable, Hashable {
         let id: UUID
-        var property: Property
+        var propertyName: String
         var status: ReservationStatus
         var renterFirstName: String
         var renterLastName: String
         var startDate: Date
         var endDate: Date
+        var inquiryDate: Date?
+        var bookingDate: Date?
+        var pricePerNight: Double
+        var cleaningFee: Double
+        var cleaningPayment: Double
+        var serviceFee: Double
+        var taxAmount: Double
+        var taxRateApplied: Double
+        var discountAmount: Double
+        var bookingSource: String
+        var paymentStatus: String
+        var phoneNumber: String
+        var emailAddress: String
+        var earlyCheckInRequested: Bool
+        var lateCheckOutRequested: Bool
+        var platformsBlocked: Bool
+        var bookingReason: String
+        var notes: String
 
         var year: Int {
             Calendar.current.component(.year, from: startDate)
         }
 
         var renterDisplayName: String {
-            "\(renterFirstName) \(renterLastName)"
+            let combined = "\(renterFirstName) \(renterLastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+            return combined.isEmpty ? "Unnamed Reservation" : combined
         }
 
         var dateRangeDisplay: String {
@@ -60,35 +83,43 @@ struct BookingsView: View {
 
     // MARK: - 1.2 Prototype Data (15 placeholders)
 
-    @State private var allReservations: [Reservation] = {
-        let cal = Calendar.current
-        func d(_ y: Int, _ m: Int, _ day: Int) -> Date {
-            cal.date(from: DateComponents(year: y, month: m, day: day)) ?? Date()
-        }
+    @FetchRequest(
+        sortDescriptors: [
+            NSSortDescriptor(key: "sortOrder", ascending: true),
+            NSSortDescriptor(key: "name", ascending: true)
+        ],
+        predicate: NSPredicate(format: "isActive == YES"),
+        animation: .default
+    ) private var storedProperties: FetchedResults<RentalProperty>
 
-        return [
-            Reservation(id: UUID(), property: .barndo, status: .booked, renterFirstName: "John", renterLastName: "Smith", startDate: d(2026, 3, 12), endDate: d(2026, 3, 15)),
-            Reservation(id: UUID(), property: .main, status: .booked, renterFirstName: "Mia", renterLastName: "Garcia", startDate: d(2026, 2, 26), endDate: d(2026, 2, 28)),
-            Reservation(id: UUID(), property: .washington, status: .inquired, renterFirstName: "Evan", renterLastName: "Lee", startDate: d(2026, 4, 2), endDate: d(2026, 4, 6)),
-            Reservation(id: UUID(), property: .barndo, status: .cancelled, renterFirstName: "Ava", renterLastName: "Johnson", startDate: d(2025, 12, 22), endDate: d(2025, 12, 27)),
-            Reservation(id: UUID(), property: .main, status: .completed, renterFirstName: "Noah", renterLastName: "Brown", startDate: d(2025, 11, 10), endDate: d(2025, 11, 12)),
-            Reservation(id: UUID(), property: .washington, status: .blocked, renterFirstName: "Owner", renterLastName: "Hold", startDate: d(2026, 5, 10), endDate: d(2026, 5, 12)),
-            Reservation(id: UUID(), property: .barndo, status: .gift, renterFirstName: "Liam", renterLastName: "Walker", startDate: d(2026, 6, 3), endDate: d(2026, 6, 7)),
-            Reservation(id: UUID(), property: .main, status: .spam, renterFirstName: "Spam", renterLastName: "Request", startDate: d(2026, 1, 5), endDate: d(2026, 1, 6)),
-            Reservation(id: UUID(), property: .washington, status: .booked, renterFirstName: "Sophia", renterLastName: "Davis", startDate: d(2026, 7, 18), endDate: d(2026, 7, 21)),
-            Reservation(id: UUID(), property: .barndo, status: .completed, renterFirstName: "Olivia", renterLastName: "Martinez", startDate: d(2024, 10, 14), endDate: d(2024, 10, 18)),
-            Reservation(id: UUID(), property: .main, status: .inquired, renterFirstName: "Ethan", renterLastName: "Moore", startDate: d(2025, 3, 9), endDate: d(2025, 3, 12)),
-            Reservation(id: UUID(), property: .washington, status: .cancelled, renterFirstName: "Isabella", renterLastName: "Hall", startDate: d(2025, 8, 2), endDate: d(2025, 8, 4)),
-            Reservation(id: UUID(), property: .barndo, status: .blocked, renterFirstName: "Maintenance", renterLastName: "Block", startDate: d(2026, 9, 1), endDate: d(2026, 9, 3)),
-            Reservation(id: UUID(), property: .main, status: .gift, renterFirstName: "Charlotte", renterLastName: "Allen", startDate: d(2024, 12, 24), endDate: d(2024, 12, 27)),
-            Reservation(id: UUID(), property: .washington, status: .completed, renterFirstName: "James", renterLastName: "Young", startDate: d(2026, 11, 10), endDate: d(2026, 11, 12))
-        ]
-    }()
+    @FetchRequest(
+        sortDescriptors: [
+            NSSortDescriptor(key: "checkInDate", ascending: false),
+            NSSortDescriptor(key: "createdAt", ascending: false)
+        ],
+        animation: .default
+    ) private var storedBookings: FetchedResults<Booking>
 
     // MARK: - 1.3 Filters
 
     /// Empty set == All
-    @State private var selectedProperties: Set<Property> = []
+    @State private var selectedPropertyNames: Set<String> = []
+    private var propertyOptions: [PropertyOption] {
+        storedProperties.compactMap { property in
+            guard let id = property.id else { return nil }
+            let trimmedName = (property.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else { return nil }
+            return PropertyOption(
+                id: id,
+                name: trimmedName,
+                pricePerNightDefault: property.pricePerNightDefault,
+                cleaningFeeDefault: property.cleaningFeeDefault,
+                cleaningPaymentDefault: property.cleaningPaymentDefault,
+                serviceFeeDefault: property.serviceFeeDefault,
+                taxRateDefault: property.taxRateDefault
+            )
+        }
+    }
     /// Empty set == All
     @State private var selectedYears: Set<Int> = []
     /// Empty set == All
@@ -96,14 +127,102 @@ struct BookingsView: View {
 
     // MARK: - 1.4 Selection + Sheets
 
+    struct PresentedReservation: Identifiable, Equatable {
+        let id: UUID
+    }
     @State private var selectedReservationID: UUID? = nil
     @State private var draftReservation: Reservation? = nil
+    @State private var presentedReservation: PresentedReservation? = nil
+    @State private var pendingDeleteReservation: Reservation? = nil
 
     @State private var isShowingYearPicker: Bool = false
     @State private var isShowingStatusPicker: Bool = false
-    @State private var isShowingDetails: Bool = false
 
     // MARK: - 1.5 Derived
+
+    private var allReservations: [Reservation] {
+        storedBookings.compactMap { booking in
+            reservation(from: booking)
+        }
+    }
+
+    private func reservation(from booking: Booking) -> Reservation? {
+        guard let id = booking.id else { return nil }
+
+        return Reservation(
+            id: id,
+            propertyName: booking.propertyName ?? "",
+            status: ReservationStatus(rawValue: booking.status ?? "") ?? .booked,
+            renterFirstName: booking.renterFirstName ?? "",
+            renterLastName: booking.renterLastName ?? "",
+            startDate: booking.checkInDate ?? Date(),
+            endDate: booking.checkOutDate ?? Date(),
+            inquiryDate: booking.inquiryDate,
+            bookingDate: booking.bookingDate,
+            pricePerNight: booking.pricePerNight,
+            cleaningFee: booking.cleaningFee,
+            cleaningPayment: booking.cleaningPayment,
+            serviceFee: booking.serviceFee,
+            taxAmount: booking.taxAmount,
+            taxRateApplied: booking.taxRateApplied,
+            discountAmount: booking.discountAmount,
+            bookingSource: booking.bookingSource ?? "",
+            paymentStatus: booking.paymentStatus ?? "",
+            phoneNumber: booking.phoneNumber ?? "",
+            emailAddress: booking.emailAddress ?? "",
+            earlyCheckInRequested: booking.earlyCheckInRequested,
+            lateCheckOutRequested: booking.lateCheckOutRequested,
+            platformsBlocked: booking.platformsBlocked,
+            bookingReason: booking.bookingReason ?? "",
+            notes: booking.notes ?? ""
+        )
+    }
+
+    private func bookingEntity(for reservationID: UUID) -> Booking? {
+        storedBookings.first(where: { $0.id == reservationID })
+    }
+
+    private func rentalPropertyEntity(named propertyName: String) -> RentalProperty? {
+        let trimmed = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        return storedProperties.first {
+            ($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }
+    }
+
+    private func propertyOption(named propertyName: String) -> PropertyOption? {
+        let trimmed = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        return propertyOptions.first {
+            $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }
+    }
+
+    private func calculatedTaxAmount(pricePerNight: Double, checkInDate: Date, checkOutDate: Date, taxRatePercent: Double) -> Double {
+        let nights = max(0, Calendar.current.dateComponents([.day], from: checkInDate, to: checkOutDate).day ?? 0)
+        let taxableBase = pricePerNight * Double(nights)
+        return taxableBase * (taxRatePercent / 100.0)
+    }
+
+    private func applyPropertyDefaults(to reservation: inout Reservation, propertyName: String) {
+        guard let option = propertyOption(named: propertyName) else { return }
+
+        reservation.pricePerNight = option.pricePerNightDefault
+        reservation.cleaningFee = option.cleaningFeeDefault
+        reservation.cleaningPayment = option.cleaningPaymentDefault
+        reservation.serviceFee = option.serviceFeeDefault
+        reservation.taxRateApplied = option.taxRateDefault
+        reservation.discountAmount = 0
+        reservation.taxAmount = calculatedTaxAmount(
+            pricePerNight: reservation.pricePerNight,
+            checkInDate: reservation.startDate,
+            checkOutDate: reservation.endDate,
+            taxRatePercent: reservation.taxRateApplied
+        )
+    }
 
     private var availableYears: [Int] {
         let years = Set(allReservations.map { $0.year })
@@ -112,7 +231,7 @@ struct BookingsView: View {
 
     private var filteredReservations: [Reservation] {
         allReservations
-            .filter { selectedProperties.isEmpty ? true : selectedProperties.contains($0.property) }
+            .filter { selectedPropertyNames.isEmpty ? true : selectedPropertyNames.contains($0.propertyName) }
             .filter { selectedYears.isEmpty ? true : selectedYears.contains($0.year) }
             .filter { selectedStatuses.isEmpty ? true : selectedStatuses.contains($0.status) }
             .sorted { $0.startDate > $1.startDate }
@@ -135,7 +254,23 @@ struct BookingsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Theme.BrandedHeaderView(title: "Bookings")
+                HStack(spacing: 12) {
+                    Theme.BrandedHeaderView(title: "Bookings")
+
+                    Button {
+                        beginNewReservation()
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Theme.Colors.crimson)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .padding(.trailing, 12)
+                    .disabled(propertyOptions.isEmpty)
+                }
+                .background(Theme.Colors.crimson)
 
                 List {
                     // 2) Filters
@@ -147,10 +282,21 @@ struct BookingsView: View {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
 
-                                HStack(spacing: 10) {
-                                    filterChip(title: "Barndo", isSelected: isPropertySelected(.barndo)) { toggleProperty(.barndo) }
-                                    filterChip(title: "Main", isSelected: isPropertySelected(.main)) { toggleProperty(.main) }
-                                    filterChip(title: "Washington", isSelected: isPropertySelected(.washington)) { toggleProperty(.washington) }
+                                if propertyOptions.isEmpty {
+                                    Text("No active properties available")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    HStack(spacing: 10) {
+                                        ForEach(propertyOptions) { option in
+                                            filterChip(
+                                                title: option.name,
+                                                isSelected: isPropertySelected(option.name)
+                                            ) {
+                                                toggleProperty(option.name)
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -213,6 +359,13 @@ struct BookingsView: View {
                                 .onTapGesture {
                                     selectReservation(reservation)
                                 }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        pendingDeleteReservation = reservation
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     } header: {
@@ -249,17 +402,32 @@ struct BookingsView: View {
                     .navigationBarTitleDisplayMode(.inline)
                 }
             }
-            .sheet(isPresented: $isShowingDetails) {
+            .sheet(item: $presentedReservation, onDismiss: {
+                draftReservation = nil
+                presentedReservation = nil
+            }) { presentedReservation in
                 NavigationStack {
-                    if let draft = draftReservation {
-                        ReservationEditorBasic(reservation: binding(for: draft.id)) {
-                            saveDraft()
-                        }
+                    if let draft = draftReservation, draft.id == presentedReservation.id {
+                        ReservationEditorBasic(
+                            reservation: binding(for: draft.id),
+                            propertyOptions: propertyOptions,
+                            isExistingReservation: bookingEntity(for: draft.id) != nil,
+                            onDeleteConfirmed: {
+                                deleteReservation(draft)
+                            },
+                            onSave: {
+                                saveDraft()
+                                self.presentedReservation = nil
+                            }
+                        )
                         .navigationTitle("Reservation")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Close") { isShowingDetails = false }
+                                Button("Close") {
+                                    self.presentedReservation = nil
+                                }
+                                .foregroundColor(.white)
                             }
                         }
                     } else {
@@ -269,30 +437,38 @@ struct BookingsView: View {
                     }
                 }
             }
+            .alert(item: $pendingDeleteReservation) { reservation in
+                Alert(
+                    title: Text("Delete Reservation"),
+                    message: Text("Are you sure you want to delete this reservation? This cannot be undone."),
+                    primaryButton: .destructive(Text("Delete")) {
+                        deleteReservation(reservation)
+                    },
+                    secondaryButton: .cancel()
+                )
+            }
         }
     }
 
     // MARK: - 1.7 Filter Helpers
 
-    private func isPropertySelected(_ p: Property) -> Bool {
-        selectedProperties.isEmpty ? true : selectedProperties.contains(p)
+    private func isPropertySelected(_ propertyName: String) -> Bool {
+        selectedPropertyNames.isEmpty ? true : selectedPropertyNames.contains(propertyName)
     }
 
-    private func toggleProperty(_ p: Property) {
-        // Empty == All. First tap moves from All -> just that one.
-        if selectedProperties.isEmpty {
-            selectedProperties = [p]
+    private func toggleProperty(_ propertyName: String) {
+        if selectedPropertyNames.isEmpty {
+            selectedPropertyNames = [propertyName]
             return
         }
 
-        if selectedProperties.contains(p) {
-            selectedProperties.remove(p)
-            // If user deselects everything, fall back to All.
-            if selectedProperties.isEmpty {
-                selectedProperties = []
+        if selectedPropertyNames.contains(propertyName) {
+            selectedPropertyNames.remove(propertyName)
+            if selectedPropertyNames.isEmpty {
+                selectedPropertyNames = []
             }
         } else {
-            selectedProperties.insert(p)
+            selectedPropertyNames.insert(propertyName)
         }
     }
 
@@ -323,7 +499,7 @@ struct BookingsView: View {
     private func selectReservation(_ reservation: Reservation) {
         selectedReservationID = reservation.id
         draftReservation = reservation
-        isShowingDetails = true
+        presentedReservation = PresentedReservation(id: reservation.id)
     }
 
     private func binding(for id: UUID) -> Binding<Reservation> {
@@ -339,22 +515,167 @@ struct BookingsView: View {
 
     private func saveDraft() {
         guard let draft = draftReservation else { return }
-        if let idx = allReservations.firstIndex(where: { $0.id == draft.id }) {
-            allReservations[idx] = draft
+
+        let now = Date()
+        let booking = bookingEntity(for: draft.id) ?? Booking(context: viewContext)
+        let isNewBooking = booking.id == nil
+
+        if isNewBooking {
+            booking.id = draft.id
+            booking.createdAt = now
+            booking.createdBy = "System"
         }
-        selectedReservationID = draft.id
+
+        booking.propertyName = draft.propertyName
+        booking.propertyRef = rentalPropertyEntity(named: draft.propertyName)
+        booking.status = draft.status.rawValue
+        booking.renterFirstName = draft.renterFirstName
+        booking.renterLastName = draft.renterLastName
+        booking.checkInDate = draft.startDate
+        booking.checkOutDate = draft.endDate
+        booking.inquiryDate = draft.inquiryDate ?? now
+        if draft.status == .booked || draft.status == .completed {
+            booking.bookingDate = draft.bookingDate ?? now
+        } else {
+            booking.bookingDate = nil
+        }
+        booking.pricePerNight = draft.pricePerNight
+        booking.cleaningFee = draft.cleaningFee
+        booking.cleaningPayment = draft.cleaningPayment
+        booking.serviceFee = draft.serviceFee
+        booking.taxAmount = draft.taxAmount
+        booking.taxRateApplied = draft.taxRateApplied
+        booking.discountAmount = draft.discountAmount
+        booking.bookingSource = draft.bookingSource
+        booking.paymentStatus = draft.paymentStatus
+        booking.phoneNumber = draft.phoneNumber
+        booking.emailAddress = draft.emailAddress
+        booking.earlyCheckInRequested = draft.earlyCheckInRequested
+        booking.lateCheckOutRequested = draft.lateCheckOutRequested
+        booking.platformsBlocked = draft.platformsBlocked
+        booking.bookingReason = draft.bookingReason
+        booking.notes = draft.notes
+        booking.lastModifiedAt = now
+        booking.lastModifiedBy = "System"
+
+        do {
+            try viewContext.save()
+            selectedReservationID = draft.id
+        } catch {
+            let nsError = error as NSError
+            print("[BookingsView] Failed to save booking: \(nsError), \(nsError.userInfo)")
+        }
+    }
+
+    private func beginNewReservation() {
+        guard let firstPropertyName = propertyOptions.first?.name else { return }
+
+        let today = Calendar.current.startOfDay(for: Date())
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+
+        var newReservation = Reservation(
+            id: UUID(),
+            propertyName: firstPropertyName,
+            status: .inquired,
+            renterFirstName: "",
+            renterLastName: "",
+            startDate: today,
+            endDate: tomorrow,
+            inquiryDate: today,
+            bookingDate: nil,
+            pricePerNight: 0,
+            cleaningFee: 0,
+            cleaningPayment: 0,
+            serviceFee: 0,
+            taxAmount: 0,
+            taxRateApplied: 0,
+            discountAmount: 0,
+            bookingSource: "",
+            paymentStatus: "",
+            phoneNumber: "",
+            emailAddress: "",
+            earlyCheckInRequested: false,
+            lateCheckOutRequested: false,
+            platformsBlocked: false,
+            bookingReason: "",
+            notes: ""
+        )
+
+        applyPropertyDefaults(to: &newReservation, propertyName: firstPropertyName)
+
+        selectedReservationID = nil
+        draftReservation = newReservation
+        presentedReservation = PresentedReservation(id: newReservation.id)
+    }
+
+    private func deleteReservation(_ reservation: Reservation) {
+        guard let booking = bookingEntity(for: reservation.id) else {
+            if draftReservation?.id == reservation.id {
+                presentedReservation = nil
+                draftReservation = nil
+            }
+            pendingDeleteReservation = nil
+            return
+        }
+
+        if selectedReservationID == reservation.id {
+            selectedReservationID = nil
+        }
+
+        if draftReservation?.id == reservation.id {
+            presentedReservation = nil
+            draftReservation = nil
+        }
+
+        viewContext.delete(booking)
+
+        do {
+            try viewContext.save()
+        } catch {
+            let nsError = error as NSError
+            print("[BookingsView] Failed to delete booking: \(nsError), \(nsError.userInfo)")
+        }
+
+        pendingDeleteReservation = nil
     }
 
     private func fallbackReservation() -> Reservation {
-        Reservation(
+        let today = Calendar.current.startOfDay(for: Date())
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today) ?? today
+
+        var reservation = Reservation(
             id: UUID(),
-            property: .barndo,
-            status: .booked,
+            propertyName: propertyOptions.first?.name ?? "",
+            status: .inquired,
             renterFirstName: "",
             renterLastName: "",
-            startDate: Date(),
-            endDate: Date()
+            startDate: today,
+            endDate: tomorrow,
+            inquiryDate: today,
+            bookingDate: nil,
+            pricePerNight: 0,
+            cleaningFee: 0,
+            cleaningPayment: 0,
+            serviceFee: 0,
+            taxAmount: 0,
+            taxRateApplied: 0,
+            discountAmount: 0,
+            bookingSource: "",
+            paymentStatus: "",
+            phoneNumber: "",
+            emailAddress: "",
+            earlyCheckInRequested: false,
+            lateCheckOutRequested: false,
+            platformsBlocked: false,
+            bookingReason: "",
+            notes: ""
         )
+
+        if let propertyName = propertyOptions.first?.name {
+            applyPropertyDefaults(to: &reservation, propertyName: propertyName)
+        }
+
+        return reservation
     }
 }
 
@@ -378,7 +699,7 @@ private struct ReservationRowBasic: View {
                 .foregroundStyle(.secondary)
 
             HStack {
-                Text(reservation.property.rawValue)
+                Text(reservation.propertyName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -498,7 +819,99 @@ private struct StatusesPickerSheet: View {
 private struct ReservationEditorBasic: View {
 
     @Binding var reservation: BookingsView.Reservation
+    let propertyOptions: [BookingsView.PropertyOption]
+    let isExistingReservation: Bool
+    let onDeleteConfirmed: () -> Void
     let onSave: () -> Void
+
+    @State private var isShowingDeleteConfirmation: Bool = false
+    @FocusState private var focusedField: FocusField?
+
+    private enum FocusField: Hashable {
+        case pricePerNight
+        case taxRateApplied
+    }
+
+    private static let bookingSourceOptions: [String] = [
+        "AirBnb",
+        "VRBO",
+        "Wix/Informal",
+        "Blocked",
+        "Gift"
+    ]
+
+    private static let paymentStatusOptions: [String] = [
+        "Paid in Full",
+        "Partially Paid",
+        "Unpaid",
+        "Deposit Returned",
+        "NA"
+    ]
+
+    private static let bookingReasonOptions: [String] = [
+        "Athletic Tournament",
+        "Charity/Armadillo Use",
+        "Corporate Retreat",
+        "Reunion/Family Gathering/Friends",
+        "Round Top",
+        "TBD",
+        "Wedding"
+    ]
+
+    private var inquiryDateBinding: Binding<Date> {
+        Binding<Date>(
+            get: { reservation.inquiryDate ?? reservation.startDate },
+            set: { reservation.inquiryDate = $0 }
+        )
+    }
+
+    private var bookingDateBinding: Binding<Date> {
+        Binding<Date>(
+            get: { reservation.bookingDate ?? Date() },
+            set: { reservation.bookingDate = $0 }
+        )
+    }
+
+    private var shouldShowBookingDate: Bool {
+        reservation.status == .booked || reservation.status == .completed
+    }
+
+    private func propertyOption(named propertyName: String) -> BookingsView.PropertyOption? {
+        let trimmed = propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        return propertyOptions.first {
+            $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }
+    }
+
+    private func recalculateTaxAmount() {
+        let nights = max(0, Calendar.current.dateComponents([.day], from: reservation.startDate, to: reservation.endDate).day ?? 0)
+        let taxableBase = reservation.pricePerNight * Double(nights)
+        reservation.taxAmount = taxableBase * (reservation.taxRateApplied / 100.0)
+    }
+
+    private func applyPropertyDefaults(for propertyName: String) {
+        guard let option = propertyOption(named: propertyName) else { return }
+
+        reservation.pricePerNight = option.pricePerNightDefault
+        reservation.cleaningFee = option.cleaningFeeDefault
+        reservation.cleaningPayment = option.cleaningPaymentDefault
+        reservation.serviceFee = option.serviceFeeDefault
+        reservation.taxRateApplied = option.taxRateDefault
+        reservation.discountAmount = 0
+        recalculateTaxAmount()
+    }
+
+    private func syncBookingDateForStatus() {
+        if shouldShowBookingDate {
+            if reservation.bookingDate == nil {
+                reservation.bookingDate = Date()
+            }
+        } else {
+            reservation.bookingDate = nil
+        }
+    }
 
     var body: some View {
         Form {
@@ -509,32 +922,182 @@ private struct ReservationEditorBasic: View {
                 TextField("Last", text: $reservation.renterLastName)
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
+                TextField("Phone Number", text: $reservation.phoneNumber)
+                    .keyboardType(.phonePad)
+                TextField("Email Address", text: $reservation.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
             }
 
             Section("Stay") {
                 DatePicker("Check-in", selection: $reservation.startDate, displayedComponents: .date)
                 DatePicker("Check-out", selection: $reservation.endDate, displayedComponents: .date)
+                DatePicker("Inquiry Date", selection: inquiryDateBinding, displayedComponents: .date)
+
+                if shouldShowBookingDate {
+                    DatePicker("Booking Date", selection: bookingDateBinding, displayedComponents: .date)
+                }
             }
 
             Section("Property") {
-                Picker("Property", selection: $reservation.property) {
-                    ForEach(BookingsView.Property.allCases) { p in
-                        Text(p.rawValue).tag(p)
+                if propertyOptions.isEmpty {
+                    Text("No active properties available")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Property", selection: $reservation.propertyName) {
+                        ForEach(propertyOptions) { option in
+                            Text(option.name).tag(option.name)
+                        }
                     }
                 }
             }
 
-            Section("Status") {
+            Section("Status & Source") {
                 Picker("Status", selection: $reservation.status) {
                     ForEach(BookingsView.ReservationStatus.allCases) { s in
                         Text(s.rawValue).tag(s)
                     }
                 }
+
+                Picker("Booking Source", selection: $reservation.bookingSource) {
+                    Text("Select Booking Source").tag("")
+                    ForEach(Self.bookingSourceOptions, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+
+                Picker("Payment Status", selection: $reservation.paymentStatus) {
+                    Text("Select Payment Status").tag("")
+                    ForEach(Self.paymentStatusOptions, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+
+                Picker("Booking Reason", selection: $reservation.bookingReason) {
+                    Text("Select Booking Reason").tag("")
+                    ForEach(Self.bookingReasonOptions, id: \.self) { option in
+                        Text(option).tag(option)
+                    }
+                }
+            }
+
+            Section("Financial") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Price Per Night")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("$0.00", value: $reservation.pricePerNight, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .pricePerNight)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Cleaning Fee")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("$0.00", value: $reservation.cleaningFee, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                        .keyboardType(.decimalPad)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Cleaning Payment")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("$0.00", value: $reservation.cleaningPayment, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                        .keyboardType(.decimalPad)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Service Fee")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("$0.00", value: $reservation.serviceFee, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                        .keyboardType(.decimalPad)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tax Amount")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("$0.00", value: $reservation.taxAmount, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                        .keyboardType(.decimalPad)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tax Rate Applied")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("0.00%", value: $reservation.taxRateApplied, format: .number)
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .taxRateApplied)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Discount Amount")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("$0.00", value: $reservation.discountAmount, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                        .keyboardType(.decimalPad)
+                }
+            }
+
+            Section("Requests & Flags") {
+                Toggle("Early Check-In Requested", isOn: $reservation.earlyCheckInRequested)
+                Toggle("Late Check-Out Requested", isOn: $reservation.lateCheckOutRequested)
+                Toggle("Platforms Blocked", isOn: $reservation.platformsBlocked)
+            }
+
+            Section("Notes") {
+                TextField("Notes", text: $reservation.notes, axis: .vertical)
+                    .lineLimit(4...8)
+                    .textInputAutocapitalization(.sentences)
             }
 
             Section {
                 Button("Save") { onSave() }
+
+                if isExistingReservation {
+                    Button("Delete", role: .destructive) {
+                        isShowingDeleteConfirmation = true
+                    }
+                }
             }
+        }
+        .onAppear {
+            if reservation.inquiryDate == nil {
+                reservation.inquiryDate = Date()
+            }
+            syncBookingDateForStatus()
+            recalculateTaxAmount()
+        }
+        .onChange(of: reservation.status) { _, _ in
+            syncBookingDateForStatus()
+        }
+        .onChange(of: reservation.propertyName) { _, newValue in
+            applyPropertyDefaults(for: newValue)
+        }
+        .onChange(of: reservation.startDate) { _, _ in
+            recalculateTaxAmount()
+        }
+        .onChange(of: reservation.endDate) { _, _ in
+            recalculateTaxAmount()
+        }
+        .onChange(of: focusedField) { oldValue, newValue in
+            if oldValue == .pricePerNight && newValue != .pricePerNight {
+                recalculateTaxAmount()
+            }
+            if oldValue == .taxRateApplied && newValue != .taxRateApplied {
+                recalculateTaxAmount()
+            }
+        }
+        .alert("Delete Reservation", isPresented: $isShowingDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                onDeleteConfirmed()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Are you sure you want to delete this reservation? This cannot be undone.")
         }
     }
 }
@@ -542,5 +1105,3 @@ private struct ReservationEditorBasic: View {
 #Preview {
     BookingsView()
 }
-
-

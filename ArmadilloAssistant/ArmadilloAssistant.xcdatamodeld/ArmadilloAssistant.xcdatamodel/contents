@@ -1,5 +1,38 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24512" systemVersion="25D2128" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24837" systemVersion="25D2128" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+    <entity name="Booking" representedClassName="Booking" syncable="YES" codeGenerationType="class">
+        <attribute name="bookingDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="bookingReason" optional="YES" attributeType="String"/>
+        <attribute name="bookingSource" optional="YES" attributeType="String"/>
+        <attribute name="checkInDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="checkOutDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="cleaningFee" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="cleaningPayment" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdBy" optional="YES" attributeType="String"/>
+        <attribute name="discountAmount" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="earlyCheckInRequested" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="emailAddress" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="inquiryDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedBy" optional="YES" attributeType="String"/>
+        <attribute name="lateCheckOutRequested" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="paymentStatus" optional="YES" attributeType="String"/>
+        <attribute name="phoneNumber" optional="YES" attributeType="String"/>
+        <attribute name="platformsBlocked" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="pricePerNight" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="propertyName" optional="YES" attributeType="String"/>
+        <attribute name="renterFirstName" optional="YES" attributeType="String"/>
+        <attribute name="renterLastName" optional="YES" attributeType="String"/>
+        <attribute name="serviceFee" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="status" optional="YES" attributeType="String"/>
+        <attribute name="taxAmount" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="taxRateApplied" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <relationship name="propertyRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="RentalProperty" inverseName="bookings" inverseEntity="RentalProperty"/>
+    </entity>
+    <entity name="Entity" representedClassName="Entity" syncable="YES" codeGenerationType="class"/>
     <entity name="Expense" representedClassName=".Expense" syncable="YES" codeGenerationType="class">
         <attribute name="category" attributeType="String" defaultValueString="Supplies"/>
         <attribute name="createdAt" attributeType="Date" defaultDateTimeInterval="795297720" usesScalarValueType="NO"/>
@@ -41,5 +74,30 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="expenses" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Expense" inverseName="projectRef" inverseEntity="Expense"/>
+    </entity>
+    <entity name="RentalProperty" representedClassName="RentalProperty" syncable="YES" codeGenerationType="class">
+        <attribute name="bathroomCount" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="bedroomCount" optional="YES" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="city" optional="YES" attributeType="String"/>
+        <attribute name="cleaningFeeDefault" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="cleaningPaymentDefault" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="colorHex" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdBy" optional="YES" attributeType="String"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isActive" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
+        <attribute name="lastModifiedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedBy" optional="YES" attributeType="String"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="postalCode" optional="YES" attributeType="String"/>
+        <attribute name="pricePerNightDefault" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="propertyDescription" optional="YES" attributeType="String"/>
+        <attribute name="serviceFeeDefault" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="shortName" optional="YES" attributeType="String"/>
+        <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="state" optional="YES" attributeType="String"/>
+        <attribute name="streetAddress" optional="YES" attributeType="String"/>
+        <attribute name="taxRateDefault" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <relationship name="bookings" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Booking" inverseName="propertyRef" inverseEntity="Booking"/>
     </entity>
 </model>

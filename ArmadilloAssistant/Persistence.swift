@@ -59,9 +59,10 @@ struct PersistenceController {
         })
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-        seedExpenseReferenceDataIfNeeded(context: container.viewContext)
+        seedReferenceDataIfNeeded(context: container.viewContext)
     }
-    private func seedExpenseReferenceDataIfNeeded(context: NSManagedObjectContext) {
+    private func seedReferenceDataIfNeeded(context: NSManagedObjectContext) {
+        seedRentalPropertiesIfNeeded(context: context)
         let projectFetchRequest: NSFetchRequest<ExpenseProject> = ExpenseProject.fetchRequest()
         projectFetchRequest.fetchLimit = 1
 
@@ -117,6 +118,55 @@ struct PersistenceController {
         } catch {
             let nsError = error as NSError
             fatalError("Failed to seed expense reference data: \(nsError), \(nsError.userInfo)")
+        }
+    }
+    private func seedRentalPropertiesIfNeeded(context: NSManagedObjectContext) {
+        let propertyFetchRequest: NSFetchRequest<RentalProperty> = RentalProperty.fetchRequest()
+        propertyFetchRequest.fetchLimit = 1
+
+        do {
+            let existingPropertyCount = try context.count(for: propertyFetchRequest)
+            guard existingPropertyCount == 0 else { return }
+
+            let now = Date()
+            let seedUser = "System"
+
+            let defaultProperties: [(name: String, shortName: String, sortOrder: Int32)] = [
+                ("Barndo", "Barndo", 0),
+                ("Main", "Main", 1),
+                ("Washington", "Washington", 2)
+            ]
+
+            for propertySeed in defaultProperties {
+                let property = RentalProperty(context: context)
+                property.id = UUID()
+                property.name = propertySeed.name
+                property.shortName = propertySeed.shortName
+                property.isActive = true
+                property.sortOrder = propertySeed.sortOrder
+                property.streetAddress = ""
+                property.city = ""
+                property.state = ""
+                property.postalCode = ""
+                property.propertyDescription = ""
+                property.bedroomCount = 0
+                property.bathroomCount = 0
+                property.colorHex = "#B31B1B"
+                property.cleaningFeeDefault = 0
+                property.cleaningPaymentDefault = 0
+                property.taxRateDefault = 0
+                property.createdAt = now
+                property.createdBy = seedUser
+                property.lastModifiedAt = now
+                property.lastModifiedBy = seedUser
+            }
+
+            if context.hasChanges {
+                try context.save()
+            }
+        } catch {
+            let nsError = error as NSError
+            fatalError("Failed to seed rental property data: \(nsError), \(nsError.userInfo)")
         }
     }
 }
