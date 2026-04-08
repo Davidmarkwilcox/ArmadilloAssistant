@@ -2,6 +2,7 @@ import SwiftUI
 
 // Custom tab-based root navigation (no NavigationStack) to avoid opaque container backgrounds.
 struct ContentView: View {
+    @AppStorage("selected_root_tab") private var storedSelectedTabRawValue: String = Tab.expenses.rawValue
 
     // MARK: - 0) App Lock
     // Use a StateObject so the view updates when `isLocked` changes.
@@ -34,25 +35,36 @@ struct ContentView: View {
         UITabBar.appearance().unselectedItemTintColor = UIColor(Theme.Colors.crimson)
     }
 
+    private var selectedTab: Binding<Tab> {
+        Binding(
+            get: { Tab(rawValue: storedSelectedTabRawValue) ?? .expenses },
+            set: { storedSelectedTabRawValue = $0.rawValue }
+        )
+    }
+
     var body: some View {
         ZStack {
-            TabView {
+            TabView(selection: selectedTab) {
                 ExpensesView()
+                    .tag(Tab.expenses)
                     .tabItem {
                         Label("Expenses", systemImage: Tab.expenses.systemImageName)
                     }
 
                 BookingsView()
+                    .tag(Tab.bookings)
                     .tabItem {
                         Label("Bookings", systemImage: Tab.bookings.systemImageName)
                     }
 
                 NarrativeView()
+                    .tag(Tab.narrative)
                     .tabItem {
                         Label("Narrative", systemImage: Tab.narrative.systemImageName)
                     }
 
                 SettingsView()
+                    .tag(Tab.settings)
                     .tabItem {
                         Label("Settings", systemImage: Tab.settings.systemImageName)
                     }
