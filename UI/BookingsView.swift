@@ -14,11 +14,39 @@ import CoreData
 struct BookingsView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
+    private static let bookingCSVHeaders: [String] = [
+        "Property",
+        "Check-In Date",
+        "Check-Out Date",
+        "Inquiry Date",
+        "Booking Date",
+        "Renter First Name",
+        "Renter Last Name",
+        "Price Per Night",
+        "Cleaning Fee",
+        "Cleaning Payment",
+        "Service Fee",
+        "Tax Amount",
+        "Tax Rate Applied",
+        "Discount Amount",
+        "Status",
+        "Booking Source",
+        "Payment Status",
+        "Phone Number",
+        "Email Address",
+        "Early Check-In Requested?",
+        "Late Check-Out Requested?",
+        "Platforms Blocked?",
+        "Booking Reason",
+        "Notes"
+    ]
+
     // MARK: - 1.1 Models (Prototype)
 
     struct PropertyOption: Identifiable, Hashable {
         let id: UUID
         let name: String
+        let shortName: String
         let pricePerNightDefault: Double
         let cleaningFeeDefault: Double
         let cleaningPaymentDefault: Double
@@ -81,6 +109,581 @@ struct BookingsView: View {
         }
     }
 
+    enum BookingCSVExportError: LocalizedError {
+        case failedToWriteFile
+
+        var errorDescription: String? {
+            switch self {
+            case .failedToWriteFile:
+                return "Unable to create the bookings CSV export file."
+            }
+        }
+    }
+
+    enum BookingCSVImportError: LocalizedError {
+        case unreadableFile
+        case invalidHeader
+        case invalidDate(row: Int, column: String, value: String)
+        case invalidBoolean(row: Int, value: String)
+        case invalidNumber(row: Int, column: String, value: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unreadableFile:
+                return "Unable to read the selected CSV file."
+            case .invalidHeader:
+                return "The selected CSV file does not match the expected Bookings import template."
+            case .invalidDate(let row, let column, let value):
+                return "Invalid date for \(column) on row \(row): \(value)"
+            case .invalidBoolean(let row, let value):
+                return "Invalid boolean value on row \(row): \(value)"
+            case .invalidNumber(let row, let column, let value):
+                return "Invalid numeric value for \(column) on row \(row): \(value)"
+            }
+        }
+    }
+
+    enum BookingBulkDeleteError: LocalizedError {
+        case failedToDelete
+
+        var errorDescription: String? {
+            switch self {
+            case .failedToDelete:
+                return "Unable to delete the stored booking records."
+            }
+        }
+    }
+
+    struct BookingCSVExporter {
+        private static let headers = BookingsView.bookingCSVHeaders
+
+        private static let dateFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter
+        }()
+
+        private static func derivedTaxRateApplied(
+            taxAmount: Double,
+            pricePerNight: Double,
+            checkInDate: Date,
+            checkOutDate: Date,
+            cleaningFee: Double
+        ) -> Double {
+            let nights = max(0, Calendar.current.dateComponents([.day], from: checkInDate, to: checkOutDate).day ?? 0)
+            let revenue = (pricePerNight * Double(nights)) + cleaningFee
+            guard revenue != 0 else { return 0 }
+            return taxAmount / revenue
+        }
+
+        private static let decimalFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = false
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 2
+            return formatter
+        }()
+
+        private static let taxRateFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = false
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 4
+            return formatter
+        }()
+
+        private static let fileNameFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyyMMdd-HHmm"
+            return formatter
+        }()
+
+        static func fetchBookings(context: NSManagedObjectContext) throws -> [Booking] {
+            let request: NSFetchRequest<Booking> = Booking.fetchRequest()
+            request.sortDescriptors = [
+                NSSortDescriptor(keyPath: \Booking.checkInDate, ascending: false),
+                NSSortDescriptor(keyPath: \Booking.createdAt, ascending: false)
+            ]
+            return try context.fetch(request)
+        }
+
+        static func csvString(from bookings: [Booking]) -> String {
+            let headerRow = headers.map(csvEscaped).joined(separator: ",")
+            let rows = bookings.map { booking in
+                let columns: [String] = [
+                    booking.propertyName ?? "",
+                    formattedDate(booking.checkInDate),
+                    formattedDate(booking.checkOutDate),
+                    formattedDate(booking.inquiryDate),
+                    formattedDate(booking.bookingDate),
+                    booking.renterFirstName ?? "",
+                    booking.renterLastName ?? "",
+                    formattedDecimalValue(booking.pricePerNight),
+                    formattedDecimalValue(booking.cleaningFee),
+                    formattedDecimalValue(booking.cleaningPayment),
+                    formattedDecimalValue(booking.serviceFee),
+                    formattedDecimalValue(booking.taxAmount),
+                    formattedTaxRateApplied(for: booking),
+                    formattedDecimalValue(booking.discountAmount),
+                    booking.status ?? "",
+                    booking.bookingSource ?? "",
+                    booking.paymentStatus ?? "",
+                    booking.phoneNumber ?? "",
+                    booking.emailAddress ?? "",
+                    booking.earlyCheckInRequested ? "Yes" : "No",
+                    booking.lateCheckOutRequested ? "Yes" : "No",
+                    booking.platformsBlocked ? "Yes" : "No",
+                    booking.bookingReason ?? "",
+                    booking.notes ?? ""
+                ]
+                return columns.map(csvEscaped).joined(separator: ",")
+            }
+
+            return ([headerRow] + rows).joined(separator: "\n")
+        }
+
+        static func writeExportFile(context: NSManagedObjectContext) throws -> URL {
+            let bookings = try fetchBookings(context: context)
+            let csv = csvString(from: bookings)
+            let fileName = "Bookings_\(fileNameFormatter.string(from: Date())).csv"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+
+            do {
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+                return url
+            } catch {
+                throw BookingCSVExportError.failedToWriteFile
+            }
+        }
+
+        private static func formattedDate(_ date: Date?) -> String {
+            guard let date else { return "" }
+            return dateFormatter.string(from: date)
+        }
+
+        private static func formattedDecimalValue(_ value: Double) -> String {
+            decimalFormatter.string(from: NSNumber(value: value)) ?? "0"
+        }
+
+        private static func formattedTaxRateApplied(for booking: Booking) -> String {
+            let nights = max(
+                0,
+                Calendar.current.dateComponents(
+                    [.day],
+                    from: booking.checkInDate ?? Date(),
+                    to: booking.checkOutDate ?? Date()
+                ).day ?? 0
+            )
+            let revenue = (booking.pricePerNight * Double(nights)) + booking.cleaningFee
+            guard revenue != 0 else { return "0" }
+
+            let derivedTaxRate = booking.taxAmount / revenue
+            return taxRateFormatter.string(from: NSNumber(value: derivedTaxRate)) ?? "0"
+        }
+
+        private nonisolated static func csvEscaped(_ value: String) -> String {
+            let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+            return "\"\(escaped)\""
+        }
+    }
+
+    struct BookingCSVImporter {
+        private static let headers = BookingsView.bookingCSVHeaders
+
+        private static let dateFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter
+        }()
+
+        private static func derivedTaxRateApplied(
+            taxAmount: Double,
+            pricePerNight: Double,
+            checkInDate: Date,
+            checkOutDate: Date,
+            cleaningFee: Double
+        ) -> Double {
+            let nights = max(0, Calendar.current.dateComponents([.day], from: checkInDate, to: checkOutDate).day ?? 0)
+            let revenue = (pricePerNight * Double(nights)) + cleaningFee
+            guard revenue != 0 else { return 0 }
+            return taxAmount / revenue
+        }
+
+        private struct ParsedBookingRow {
+            let propertyName: String
+            let checkInDate: Date
+            let checkOutDate: Date
+            let inquiryDate: Date?
+            let bookingDate: Date?
+            let renterFirstName: String
+            let renterLastName: String
+            let pricePerNight: Double
+            let cleaningFee: Double
+            let cleaningPayment: Double
+            let serviceFee: Double
+            let taxAmount: Double
+            let taxRateApplied: Double
+            let discountAmount: Double
+            let status: String
+            let bookingSource: String
+            let paymentStatus: String
+            let phoneNumber: String
+            let emailAddress: String
+            let earlyCheckInRequested: Bool
+            let lateCheckOutRequested: Bool
+            let platformsBlocked: Bool
+            let bookingReason: String
+            let notes: String
+        }
+
+        private struct BookingImportMatchKey: Hashable {
+            let propertyName: String
+            let checkInDate: Date
+            let checkOutDate: Date
+            let renterFirstName: String
+            let renterLastName: String
+            let status: String
+            let bookingDate: Date?
+        }
+
+        static func importFile(from url: URL, context: NSManagedObjectContext) throws -> Int {
+            let csvText: String
+            print("[BookingCSVImport] Import entry")
+            print("[BookingCSVImport] Selected file URL: \(url.path)")
+
+            do {
+                csvText = try String(contentsOf: url, encoding: .utf8)
+            } catch {
+                print("[BookingCSVImport] Failed to read CSV: \(error.localizedDescription)")
+                throw BookingCSVImportError.unreadableFile
+            }
+
+            let rows = parseCSVRows(csvText)
+            guard let headerRow = rows.first else {
+                print("[BookingCSVImport] Missing header row")
+                throw BookingCSVImportError.invalidHeader
+            }
+
+            let normalizedHeader = normalizedHeaderRow(headerRow)
+            let expectedHeader = normalizedHeaderRow(headers)
+            guard Array(normalizedHeader.prefix(expectedHeader.count)) == expectedHeader else {
+                print("[BookingCSVImport] Header validation failed")
+                throw BookingCSVImportError.invalidHeader
+            }
+
+            let parsedRows = try rows
+                .dropFirst()
+                .enumerated()
+                .compactMap { offset, row in
+                    try parsedBookingRow(from: row, rowNumber: offset + 2)
+                }
+            print("[BookingCSVImport] Parsed row count: \(parsedRows.count)")
+
+            if parsedRows.isEmpty {
+                print("[BookingCSVImport] Early return: no parsed booking rows")
+                print("[BookingCSVImport] Returned import count: 0")
+                return 0
+            }
+
+            let now = Date()
+            let trimmedProperties = fetchPropertyMap(context: context)
+            var existingKeys = Set(fetchExistingBookingKeys(context: context))
+            var importedCount = 0
+            var skippedDuplicateCount = 0
+
+            for parsedRow in parsedRows {
+                let importKey = makeMatchKey(
+                    propertyName: parsedRow.propertyName,
+                    checkInDate: parsedRow.checkInDate,
+                    checkOutDate: parsedRow.checkOutDate,
+                    renterFirstName: parsedRow.renterFirstName,
+                    renterLastName: parsedRow.renterLastName,
+                    status: parsedRow.status,
+                    bookingDate: parsedRow.bookingDate
+                )
+
+                guard !existingKeys.contains(importKey) else {
+                    skippedDuplicateCount += 1
+                    continue
+                }
+
+                let booking = Booking(context: context)
+                booking.id = UUID()
+                booking.propertyName = parsedRow.propertyName
+                booking.propertyRef = trimmedProperties[parsedRow.propertyName.trimmingCharacters(in: .whitespacesAndNewlines)]
+                booking.checkInDate = parsedRow.checkInDate
+                booking.checkOutDate = parsedRow.checkOutDate
+                booking.inquiryDate = parsedRow.inquiryDate
+                booking.bookingDate = parsedRow.bookingDate
+                booking.renterFirstName = parsedRow.renterFirstName
+                booking.renterLastName = parsedRow.renterLastName
+                booking.pricePerNight = parsedRow.pricePerNight
+                booking.cleaningFee = parsedRow.cleaningFee
+                booking.cleaningPayment = parsedRow.cleaningPayment
+                booking.serviceFee = parsedRow.serviceFee
+                booking.taxAmount = parsedRow.taxAmount
+                booking.taxRateApplied = parsedRow.taxRateApplied
+                booking.discountAmount = parsedRow.discountAmount
+                booking.status = parsedRow.status
+                booking.bookingSource = parsedRow.bookingSource
+                booking.paymentStatus = parsedRow.paymentStatus
+                booking.phoneNumber = parsedRow.phoneNumber
+                booking.emailAddress = parsedRow.emailAddress
+                booking.earlyCheckInRequested = parsedRow.earlyCheckInRequested
+                booking.lateCheckOutRequested = parsedRow.lateCheckOutRequested
+                booking.platformsBlocked = parsedRow.platformsBlocked
+                booking.bookingReason = parsedRow.bookingReason
+                booking.notes = parsedRow.notes
+                booking.createdAt = now
+                booking.createdBy = "CSV Import"
+                booking.lastModifiedAt = now
+                booking.lastModifiedBy = "CSV Import"
+                existingKeys.insert(importKey)
+                importedCount += 1
+            }
+
+            print("[BookingCSVImport] Duplicate skip count: \(skippedDuplicateCount)")
+            print("[BookingCSVImport] Created booking count: \(importedCount)")
+
+            if importedCount == 0 {
+                print("[BookingCSVImport] Early return: all parsed rows were duplicates")
+                print("[BookingCSVImport] Returned import count: 0")
+                return 0
+            }
+
+            do {
+                try context.save()
+                print("[BookingCSVImport] Save success")
+            } catch {
+                context.rollback()
+                print("[BookingCSVImport] Save failure: \(error.localizedDescription)")
+                throw error
+            }
+
+            print("[BookingCSVImport] Returned import count: \(importedCount)")
+            return importedCount
+        }
+
+        private static func fetchPropertyMap(context: NSManagedObjectContext) -> [String: RentalProperty] {
+            let request: NSFetchRequest<RentalProperty> = RentalProperty.fetchRequest()
+            let properties = (try? context.fetch(request)) ?? []
+            return Dictionary(uniqueKeysWithValues: properties.compactMap { property in
+                guard let name = property.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+                    return nil
+                }
+                return (name, property)
+            })
+        }
+
+        private static func fetchExistingBookingKeys(context: NSManagedObjectContext) -> [BookingImportMatchKey] {
+            let request: NSFetchRequest<Booking> = Booking.fetchRequest()
+            let bookings = (try? context.fetch(request)) ?? []
+            return bookings.map { booking in
+                makeMatchKey(
+                    propertyName: booking.propertyName ?? "",
+                    checkInDate: booking.checkInDate ?? Date.distantPast,
+                    checkOutDate: booking.checkOutDate ?? Date.distantPast,
+                    renterFirstName: booking.renterFirstName ?? "",
+                    renterLastName: booking.renterLastName ?? "",
+                    status: booking.status ?? "",
+                    bookingDate: booking.bookingDate
+                )
+            }
+        }
+
+        private static func makeMatchKey(
+            propertyName: String,
+            checkInDate: Date,
+            checkOutDate: Date,
+            renterFirstName: String,
+            renterLastName: String,
+            status: String,
+            bookingDate: Date?
+        ) -> BookingImportMatchKey {
+            BookingImportMatchKey(
+                propertyName: normalizedMatchString(propertyName),
+                checkInDate: checkInDate,
+                checkOutDate: checkOutDate,
+                renterFirstName: normalizedMatchString(renterFirstName),
+                renterLastName: normalizedMatchString(renterLastName),
+                status: normalizedMatchString(status),
+                bookingDate: bookingDate
+            )
+        }
+
+        private static func normalizedMatchString(_ value: String) -> String {
+            value.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        }
+
+        private static func parsedBookingRow(from row: [String], rowNumber: Int) throws -> ParsedBookingRow? {
+            let paddedRow = row + Array(repeating: "", count: max(0, headers.count - row.count))
+            let normalized = Array(paddedRow.prefix(headers.count)).map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let hasAnyValue = normalized.contains { !$0.isEmpty }
+            guard hasAnyValue else { return nil }
+
+            let checkInDate = try parseRequiredDate(normalized[1], rowNumber: rowNumber, column: "Check-In Date")
+            let checkOutDate = try parseRequiredDate(normalized[2], rowNumber: rowNumber, column: "Check-Out Date")
+            let pricePerNight = try parseNumber(normalized[7], rowNumber: rowNumber, column: "Price Per Night")
+            let cleaningFee = try parseNumber(normalized[8], rowNumber: rowNumber, column: "Cleaning Fee")
+            let taxAmount = try parseNumber(normalized[11], rowNumber: rowNumber, column: "Tax Amount")
+
+            return ParsedBookingRow(
+                propertyName: normalized[0],
+                checkInDate: checkInDate,
+                checkOutDate: checkOutDate,
+                inquiryDate: try parseOptionalDate(normalized[3], rowNumber: rowNumber, column: "Inquiry Date"),
+                bookingDate: try parseOptionalDate(normalized[4], rowNumber: rowNumber, column: "Booking Date"),
+                renterFirstName: normalized[5],
+                renterLastName: normalized[6],
+                pricePerNight: pricePerNight,
+                cleaningFee: cleaningFee,
+                cleaningPayment: try parseNumber(normalized[9], rowNumber: rowNumber, column: "Cleaning Payment"),
+                serviceFee: try parseNumber(normalized[10], rowNumber: rowNumber, column: "Service Fee"),
+                taxAmount: taxAmount,
+                taxRateApplied: derivedTaxRateApplied(
+                    taxAmount: taxAmount,
+                    pricePerNight: pricePerNight,
+                    checkInDate: checkInDate,
+                    checkOutDate: checkOutDate,
+                    cleaningFee: cleaningFee
+                ),
+                discountAmount: try parseNumber(normalized[13], rowNumber: rowNumber, column: "Discount Amount"),
+                status: normalized[14],
+                bookingSource: normalized[15],
+                paymentStatus: normalized[16],
+                phoneNumber: normalized[17],
+                emailAddress: normalized[18],
+                earlyCheckInRequested: try parseBoolean(normalized[19], rowNumber: rowNumber),
+                lateCheckOutRequested: try parseBoolean(normalized[20], rowNumber: rowNumber),
+                platformsBlocked: try parseBoolean(normalized[21], rowNumber: rowNumber),
+                bookingReason: normalized[22],
+                notes: normalized[23]
+            )
+        }
+
+        private static func parseRequiredDate(_ value: String, rowNumber: Int, column: String) throws -> Date {
+            guard let date = dateFormatter.date(from: value) else {
+                throw BookingCSVImportError.invalidDate(row: rowNumber, column: column, value: value)
+            }
+            return date
+        }
+
+        private static func parseOptionalDate(_ value: String, rowNumber: Int, column: String) throws -> Date? {
+            guard !value.isEmpty else { return nil }
+            guard let date = dateFormatter.date(from: value) else {
+                throw BookingCSVImportError.invalidDate(row: rowNumber, column: column, value: value)
+            }
+            return date
+        }
+
+        private static func parseBoolean(_ value: String, rowNumber: Int) throws -> Bool {
+            if value.isEmpty { return false }
+
+            switch value.lowercased() {
+            case "yes", "y", "true", "1":
+                return true
+            case "no", "n", "false", "0":
+                return false
+            default:
+                throw BookingCSVImportError.invalidBoolean(row: rowNumber, value: value)
+            }
+        }
+
+        private static func parseNumber(_ value: String, rowNumber: Int, column: String) throws -> Double {
+            if value.isEmpty { return 0 }
+
+            let sanitized = value
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: ",", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard let parsed = Double(sanitized) else {
+                throw BookingCSVImportError.invalidNumber(row: rowNumber, column: column, value: value)
+            }
+
+            return parsed
+        }
+
+        private static func normalizedHeaderRow(_ row: [String]) -> [String] {
+            Array(row.prefix(headers.count)).enumerated().map { index, value in
+                var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if index == 0 {
+                    normalized = normalized.replacingOccurrences(of: "\u{FEFF}", with: "")
+                }
+                return normalized
+            }
+        }
+
+        private static func parseCSVRows(_ text: String) -> [[String]] {
+            let normalizedText = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+            var rows: [[String]] = []
+            var currentRow: [String] = []
+            var currentField: String = ""
+            var isInsideQuotes = false
+
+            let characters = Array(normalizedText)
+            var index = 0
+
+            while index < characters.count {
+                let character = characters[index]
+
+                if isInsideQuotes {
+                    if character == "\"" {
+                        let nextIndex = index + 1
+                        if nextIndex < characters.count, characters[nextIndex] == "\"" {
+                            currentField.append("\"")
+                            index += 1
+                        } else {
+                            isInsideQuotes = false
+                        }
+                    } else {
+                        currentField.append(character)
+                    }
+                } else {
+                    switch character {
+                    case "\"":
+                        isInsideQuotes = true
+                    case ",":
+                        currentRow.append(currentField)
+                        currentField = ""
+                    case "\n":
+                        currentRow.append(currentField)
+                        rows.append(currentRow)
+                        currentRow = []
+                        currentField = ""
+                    default:
+                        currentField.append(character)
+                    }
+                }
+
+                index += 1
+            }
+
+            if !currentField.isEmpty || !currentRow.isEmpty {
+                currentRow.append(currentField)
+                rows.append(currentRow)
+            }
+
+            return rows
+        }
+    }
+
     // MARK: - 1.2 Prototype Data (15 placeholders)
 
     @FetchRequest(
@@ -112,6 +715,9 @@ struct BookingsView: View {
             return PropertyOption(
                 id: id,
                 name: trimmedName,
+                shortName: ((property.shortName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)).isEmpty
+                    ? trimmedName
+                    : (property.shortName ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 pricePerNightDefault: property.pricePerNightDefault,
                 cleaningFeeDefault: property.cleaningFeeDefault,
                 cleaningPaymentDefault: property.cleaningPaymentDefault,
@@ -187,8 +793,10 @@ struct BookingsView: View {
         guard !trimmed.isEmpty else { return nil }
 
         return storedProperties.first {
-            ($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                .localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+            let name = ($0.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let shortName = ($0.shortName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+                || shortName.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
         }
     }
 
@@ -198,7 +806,12 @@ struct BookingsView: View {
 
         return propertyOptions.first {
             $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+                || $0.shortName.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
         }
+    }
+
+    private func propertyFilterToken(for propertyName: String) -> String {
+        propertyOption(named: propertyName)?.name ?? propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func calculatedTaxAmount(pricePerNight: Double, checkInDate: Date, checkOutDate: Date, taxRatePercent: Double) -> Double {
@@ -231,7 +844,11 @@ struct BookingsView: View {
 
     private var filteredReservations: [Reservation] {
         allReservations
-            .filter { selectedPropertyNames.isEmpty ? true : selectedPropertyNames.contains($0.propertyName) }
+            .filter {
+                selectedPropertyNames.isEmpty
+                    ? true
+                    : selectedPropertyNames.contains(propertyFilterToken(for: $0.propertyName))
+            }
             .filter { selectedYears.isEmpty ? true : selectedYears.contains($0.year) }
             .filter { selectedStatuses.isEmpty ? true : selectedStatuses.contains($0.status) }
             .sorted { $0.startDate > $1.startDate }
@@ -247,6 +864,42 @@ struct BookingsView: View {
         if selectedStatuses.isEmpty { return "All" }
         if Set(selectedStatuses) == Set(ReservationStatus.allCases) { return "All" }
         return selectedStatuses.map { $0.rawValue }.sorted().joined(separator: ", ")
+    }
+
+    static func makeBookingsCSVExportFile(context: NSManagedObjectContext) throws -> URL {
+        try BookingCSVExporter.writeExportFile(context: context)
+    }
+
+    static func importBookingsCSV(from url: URL, context: NSManagedObjectContext) throws -> Int {
+        print("[BookingCSVImport] Import entry")
+        print("[BookingCSVImport] Selected file URL: \(url.path)")
+        let importedCount = try BookingCSVImporter.importFile(from: url, context: context)
+        print("[BookingCSVImport] Returned import count: \(importedCount)")
+        return importedCount
+    }
+
+    static func deleteAllBookingData(context: NSManagedObjectContext) throws -> Int {
+        let fetchRequest: NSFetchRequest<NSFetchRequestResult> = Booking.fetchRequest()
+        let countRequest: NSFetchRequest<Booking> = Booking.fetchRequest()
+        let existingCount = try context.count(for: countRequest)
+
+        guard existingCount > 0 else { return 0 }
+
+        let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
+        deleteRequest.resultType = .resultTypeObjectIDs
+
+        do {
+            let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+            if let deletedObjectIDs = result?.result as? [NSManagedObjectID], !deletedObjectIDs.isEmpty {
+                let changes: [AnyHashable: Any] = [NSDeletedObjectsKey: deletedObjectIDs]
+                NSManagedObjectContext.mergeChanges(fromRemoteContextSave: changes, into: [context])
+            } else {
+                context.refreshAllObjects()
+            }
+            return existingCount
+        } catch {
+            throw BookingBulkDeleteError.failedToDelete
+        }
     }
 
     // MARK: - 1.6 Body
@@ -290,7 +943,7 @@ struct BookingsView: View {
                                     HStack(spacing: 10) {
                                         ForEach(propertyOptions) { option in
                                             filterChip(
-                                                title: option.name,
+                                                title: option.shortName,
                                                 isSelected: isPropertySelected(option.name)
                                             ) {
                                                 toggleProperty(option.name)
@@ -425,6 +1078,13 @@ struct BookingsView: View {
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
                                 Button("Close") {
+                                    self.presentedReservation = nil
+                                }
+                                .foregroundColor(.white)
+                            }
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Save") {
+                                    saveDraft()
                                     self.presentedReservation = nil
                                 }
                                 .foregroundColor(.white)
@@ -885,6 +1545,12 @@ private struct ReservationEditorBasic: View {
         }
     }
 
+    private var selectedPropertyDisplayName: String {
+        let trimmed = reservation.propertyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return propertyOption(named: trimmed)?.shortName ?? trimmed
+    }
+
     private func recalculateTaxAmount() {
         let nights = max(0, Calendar.current.dateComponents([.day], from: reservation.startDate, to: reservation.endDate).day ?? 0)
         let taxableBase = reservation.pricePerNight * Double(nights)
@@ -946,8 +1612,12 @@ private struct ReservationEditorBasic: View {
                         .foregroundStyle(.secondary)
                 } else {
                     Picker("Property", selection: $reservation.propertyName) {
+                        if propertyOption(named: reservation.propertyName) == nil,
+                           !selectedPropertyDisplayName.isEmpty {
+                            Text(selectedPropertyDisplayName).tag(reservation.propertyName)
+                        }
                         ForEach(propertyOptions) { option in
-                            Text(option.name).tag(option.name)
+                            Text(option.shortName).tag(option.name)
                         }
                     }
                 }
@@ -1054,10 +1724,8 @@ private struct ReservationEditorBasic: View {
                     .textInputAutocapitalization(.sentences)
             }
 
-            Section {
-                Button("Save") { onSave() }
-
-                if isExistingReservation {
+            if isExistingReservation {
+                Section {
                     Button("Delete", role: .destructive) {
                         isShowingDeleteConfirmation = true
                     }
@@ -1069,7 +1737,6 @@ private struct ReservationEditorBasic: View {
                 reservation.inquiryDate = Date()
             }
             syncBookingDateForStatus()
-            recalculateTaxAmount()
         }
         .onChange(of: reservation.status) { _, _ in
             syncBookingDateForStatus()

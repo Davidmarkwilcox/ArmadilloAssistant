@@ -1771,14 +1771,24 @@ private struct PropertySettingsView: View {
 private struct DataManagementSettingsView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
+    private enum ImportTarget {
+        case bookings
+        case expenses
+    }
+
     @State private var exportShareItem: ExportShareItem?
     @State private var exportErrorMessage: String = ""
     @State private var isShowingExportErrorAlert: Bool = false
-    @State private var isShowingExpenseImportPicker: Bool = false
+    @State private var activeImportTarget: ImportTarget?
     @State private var importErrorMessage: String = ""
     @State private var isShowingImportErrorAlert: Bool = false
     @State private var importSuccessMessage: String = ""
     @State private var isShowingImportSuccessAlert: Bool = false
+    @State private var isShowingDeleteAllBookingConfirmation: Bool = false
+    @State private var deleteBookingErrorMessage: String = ""
+    @State private var isShowingDeleteBookingErrorAlert: Bool = false
+    @State private var deleteBookingSuccessMessage: String = ""
+    @State private var isShowingDeleteBookingSuccessAlert: Bool = false
     @State private var isShowingDeleteAllExpenseConfirmation: Bool = false
     @State private var deleteExpenseErrorMessage: String = ""
     @State private var isShowingDeleteExpenseErrorAlert: Bool = false
@@ -1790,6 +1800,13 @@ private struct DataManagementSettingsView: View {
         let url: URL
     }
 
+    private var isShowingImportPicker: Binding<Bool> {
+        Binding(
+            get: { activeImportTarget != nil },
+            set: { _ in }
+        )
+    }
+
     private func exportExpensesCSV() {
         do {
             let fileURL = try ExpensesView.makeExpensesCSVExportFile(context: viewContext)
@@ -1797,6 +1814,37 @@ private struct DataManagementSettingsView: View {
         } catch {
             exportErrorMessage = error.localizedDescription
             isShowingExportErrorAlert = true
+        }
+    }
+
+    private func exportBookingsCSV() {
+        do {
+            let fileURL = try BookingsView.makeBookingsCSVExportFile(context: viewContext)
+            exportShareItem = ExportShareItem(url: fileURL)
+        } catch {
+            exportErrorMessage = error.localizedDescription
+            isShowingExportErrorAlert = true
+        }
+    }
+
+    private func importBookingsCSV(from url: URL) {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let importedCount = try BookingsView.importBookingsCSV(from: url, context: viewContext)
+            importSuccessMessage = importedCount == 1
+                ? "Imported 1 booking record successfully."
+                : "Imported \(importedCount) booking records successfully."
+            isShowingImportSuccessAlert = true
+        } catch {
+            importErrorMessage = error.localizedDescription
+            isShowingImportErrorAlert = true
         }
     }
 
@@ -1821,6 +1869,19 @@ private struct DataManagementSettingsView: View {
         }
     }
 
+    private func deleteAllBookingData() {
+        do {
+            let deletedCount = try BookingsView.deleteAllBookingData(context: viewContext)
+            deleteBookingSuccessMessage = deletedCount == 1
+                ? "Deleted 1 booking record successfully."
+                : "Deleted \(deletedCount) booking records successfully."
+            isShowingDeleteBookingSuccessAlert = true
+        } catch {
+            deleteBookingErrorMessage = error.localizedDescription
+            isShowingDeleteBookingErrorAlert = true
+        }
+    }
+
     private func deleteAllExpenseData() {
         do {
             let deletedCount = try ExpensesView.deleteAllExpenseData(context: viewContext)
@@ -1838,6 +1899,7 @@ private struct DataManagementSettingsView: View {
         List {
             Section {
                 Button {
+                    exportBookingsCSV()
                 } label: {
                     Label("Export reservations to CSV", systemImage: "square.and.arrow.up")
                 }
@@ -1850,28 +1912,30 @@ private struct DataManagementSettingsView: View {
             } header: {
                 Text("Export")
             } footer: {
-                Text("Expense CSV export will use canonical headers and standard CSV escaping so commas in Notes remain safe during export and re-import.")
+                Text("Booking and expense CSV export use canonical headers and standard CSV escaping so commas in text fields remain safe during export and re-import.")
             }
 
             Section {
                 Button {
+                    activeImportTarget = .bookings
                 } label: {
-                    Label("Import reservations", systemImage: "square.and.arrow.down")
+                    Label("Import reservations from CSV", systemImage: "square.and.arrow.down")
                 }
 
                 Button {
-                    isShowingExpenseImportPicker = true
+                    activeImportTarget = .expenses
                 } label: {
                     Label("Import expenses from CSV", systemImage: "square.and.arrow.down.on.square")
                 }
             } header: {
                 Text("Import")
             } footer: {
-                Text("Expense imports will expect the canonical CSV column layout and will support quoted Notes values so embedded commas do not break parsing.")
+                Text("Booking and expense imports expect the canonical CSV column layout and support quoted text values so embedded commas do not break parsing.")
             }
 
             Section {
                 Button(role: .destructive) {
+                    isShowingDeleteAllBookingConfirmation = true
                 } label: {
                     Label("Delete all reservation data", systemImage: "trash")
                 }
@@ -1884,7 +1948,7 @@ private struct DataManagementSettingsView: View {
             } header: {
                 Text("Deletion")
             } footer: {
-                Text("Deleting all expense data removes all stored expense records. Expense settings such as projects, categories, and mileage rate are retained.")
+                Text("Deleting booking data removes stored booking records. Deleting expense data removes stored expense records while retaining expense settings such as projects, categories, and mileage rate.")
             }
         }
         .navigationTitle("Data Management")
@@ -1892,18 +1956,26 @@ private struct DataManagementSettingsView: View {
             ActivityViewSheet(activityItems: [item.url])
         }
         .fileImporter(
-            isPresented: $isShowingExpenseImportPicker,
+            isPresented: isShowingImportPicker,
             allowedContentTypes: [.commaSeparatedText, .text],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
                 guard let selectedURL = urls.first else { return }
-                importExpensesCSV(from: selectedURL)
+                switch activeImportTarget {
+                case .bookings:
+                    importBookingsCSV(from: selectedURL)
+                case .expenses:
+                    importExpensesCSV(from: selectedURL)
+                case nil:
+                    break
+                }
             case .failure(let error):
                 importErrorMessage = error.localizedDescription
                 isShowingImportErrorAlert = true
             }
+            activeImportTarget = nil
         }
         .alert("Export Failed", isPresented: $isShowingExportErrorAlert) {
             Button("OK", role: .cancel) { }
@@ -1919,6 +1991,24 @@ private struct DataManagementSettingsView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(importSuccessMessage)
+        }
+        .alert("Delete All Booking Data?", isPresented: $isShowingDeleteAllBookingConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete All", role: .destructive) {
+                deleteAllBookingData()
+            }
+        } message: {
+            Text("This will permanently delete all booking records. This action cannot be undone.")
+        }
+        .alert("Deletion Failed", isPresented: $isShowingDeleteBookingErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteBookingErrorMessage)
+        }
+        .alert("Deletion Complete", isPresented: $isShowingDeleteBookingSuccessAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(deleteBookingSuccessMessage)
         }
         .alert("Delete All Expense Data?", isPresented: $isShowingDeleteAllExpenseConfirmation) {
             Button("Cancel", role: .cancel) { }
