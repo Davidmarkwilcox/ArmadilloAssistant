@@ -20,6 +20,9 @@ import UIKit
 // MARK: - 1) ExpensesView
 
 struct ExpensesView: View {
+    let onSearchTapped: () -> Void
+    let externalExpenseSelectionID: UUID?
+    let onHandledExternalExpenseSelection: () -> Void
 
     // MARK: - 1.1 Models
 
@@ -538,6 +541,9 @@ struct ExpensesView: View {
     @State private var rangeFilter: ExpenseRangeFilter? = .recent30Days
     @State private var reimbursedOnly: Bool = false
     @State private var selectedExpensers: Set<Expenser> = []
+    @State private var searchText: String = ""
+    @State private var recentSearches: [String] = []
+    @FocusState private var isSearchFieldFocused: Bool
 
     @State private var isShowingExpenserPicker: Bool = false
     @State private var isShowingNewExpenseSheet: Bool = false
@@ -547,6 +553,16 @@ struct ExpensesView: View {
     @State private var editingExpenseID: NSManagedObjectID?
     @State private var pendingSwipeDeleteExpense: ExpenseItem?
     @State private var isShowingDetails: Bool = false
+
+    init(
+        onSearchTapped: @escaping () -> Void = {},
+        externalExpenseSelectionID: UUID? = nil,
+        onHandledExternalExpenseSelection: @escaping () -> Void = {}
+    ) {
+        self.onSearchTapped = onSearchTapped
+        self.externalExpenseSelectionID = externalExpenseSelectionID
+        self.onHandledExternalExpenseSelection = onHandledExternalExpenseSelection
+    }
 
     // MARK: - 1.3 Derived
 
@@ -591,6 +607,7 @@ struct ExpensesView: View {
             }
             .filter { !reimbursedOnly || $0.isReimbursed }
             .filter { selectedExpensers.isEmpty ? true : selectedExpensers.contains($0.expenser) }
+            .filter(matchesSearch)
     }
 
     private var isShowingEmptyState: Bool {
@@ -821,14 +838,119 @@ struct ExpensesView: View {
             .joined(separator: ", ")
     }
 
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var shouldShowRecentSearches: Bool {
+        isSearchFieldFocused && trimmedSearchText.isEmpty && !recentSearches.isEmpty
+    }
+
+    private func matchesSearch(_ expense: ExpenseItem) -> Bool {
+        let query = trimmedSearchText
+        guard !query.isEmpty else { return true }
+
+        let searchTerms = [
+            expense.description,
+            expense.category,
+            expense.property,
+            expense.expenser.rawValue,
+            storedExpenses.first(where: { $0.objectID == expense.storageID })?.expenseType ?? ""
+        ]
+
+        return searchTerms.contains {
+            $0.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func loadRecentSearches() {
+        let savedSearches = UserDefaults.standard.stringArray(forKey: "recent_searches_expenses") ?? []
+        recentSearches = Array(savedSearches.prefix(5))
+    }
+
+    private func saveRecentSearches(_ searches: [String]) {
+        let limitedSearches = Array(searches.prefix(5))
+        recentSearches = limitedSearches
+        UserDefaults.standard.set(limitedSearches, forKey: "recent_searches_expenses")
+    }
+
+    private func recordRecentSearch(_ rawValue: String) {
+        let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+
+        var updatedSearches = recentSearches.filter {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(trimmedValue) != .orderedSame
+        }
+        updatedSearches.insert(trimmedValue, at: 0)
+        saveRecentSearches(updatedSearches)
+    }
+
+    private func commitSearchIfNeeded() {
+        let trimmedValue = trimmedSearchText
+        guard !trimmedValue.isEmpty else { return }
+        searchText = trimmedValue
+        recordRecentSearch(trimmedValue)
+    }
+
+    private func applyRecentSearch(_ search: String) {
+        let trimmedValue = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+        searchText = trimmedValue
+        recordRecentSearch(trimmedValue)
+        isSearchFieldFocused = true
+    }
+
+    private func clearRecentSearches() {
+        recentSearches = []
+        UserDefaults.standard.removeObject(forKey: "recent_searches_expenses")
+    }
+
     // MARK: - 1.5 Body
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Theme.BrandedHeaderView(title: "Expenses")
+                Theme.BrandedHeaderView(title: "Expenses") {
+                    Theme.HeaderActionButton(systemImageName: "magnifyingglass", action: onSearchTapped)
+                }
 
                 List {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ExpensesInlineSearchField(
+                                text: $searchText,
+                                placeholder: "Search expenses",
+                                isFocused: $isSearchFieldFocused,
+                                onSubmit: commitSearchIfNeeded
+                            )
+
+                            if shouldShowRecentSearches {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(recentSearches, id: \.self) { recentSearch in
+                                        Button {
+                                            applyRecentSearch(recentSearch)
+                                        } label: {
+                                            HStack {
+                                                Text(recentSearch)
+                                                    .foregroundStyle(.primary)
+                                                Spacer()
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
+                                    Button("Clear Recent Searches") {
+                                        clearRecentSearches()
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    }
+
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
                             VStack(alignment: .leading, spacing: 8) {
@@ -956,6 +1078,13 @@ struct ExpensesView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .onAppear {
+                loadRecentSearches()
+                handleExternalExpenseSelectionIfNeeded()
+            }
+            .onChange(of: externalExpenseSelectionID) { _, _ in
+                handleExternalExpenseSelectionIfNeeded()
+            }
             .safeAreaInset(edge: .bottom) {
                 HStack {
                     Spacer()
@@ -1080,10 +1209,61 @@ struct ExpensesView: View {
 
     // MARK: - 1.6 Selection
 
+    private func handleExternalExpenseSelectionIfNeeded() {
+        guard let externalExpenseSelectionID else { return }
+        defer { onHandledExternalExpenseSelection() }
+
+        guard let expense = filteredExpenses.first(where: { $0.id == externalExpenseSelectionID })
+            ?? coreDataExpenseItems.first(where: { $0.id == externalExpenseSelectionID }) else {
+            return
+        }
+
+        selectExpense(expense)
+    }
+
     private func selectExpense(_ expense: ExpenseItem) {
         selectedExpenseID = expense.id
         draftExpense = expense
         isShowingDetails = true
+    }
+}
+
+private struct ExpensesInlineSearchField: View {
+    @Binding var text: String
+    let placeholder: String
+    @FocusState.Binding var isFocused: Bool
+    let onSubmit: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField(placeholder, text: $text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($isFocused)
+                .onSubmit(onSubmit)
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

@@ -18,12 +18,34 @@ import CoreData
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
+    enum Destination: Hashable {
+        case profile
+        case property
+        case expenses
+        case team
+        case dataManagement
+    }
 
     // MARK: - 1) Debug (default Off)
     private let debugEnabled: Bool = false
 
     @StateObject private var sharingManager = CloudKitSharingManager.shared
     @State private var hasPerformedInitialSettingsSessionRefresh: Bool = false
+    @State private var navigationPath = NavigationPath()
+
+    let onSearchTapped: () -> Void
+    let externalSettingsDestination: ContentView.SettingsSubsectionDestination?
+    let onHandledExternalSettingsDestination: () -> Void
+
+    init(
+        onSearchTapped: @escaping () -> Void = {},
+        externalSettingsDestination: ContentView.SettingsSubsectionDestination? = nil,
+        onHandledExternalSettingsDestination: @escaping () -> Void = {}
+    ) {
+        self.onSearchTapped = onSearchTapped
+        self.externalSettingsDestination = externalSettingsDestination
+        self.onHandledExternalSettingsDestination = onHandledExternalSettingsDestination
+    }
 
     private func debugLog(_ message: String) {
         guard debugEnabled else { return }
@@ -41,41 +63,55 @@ struct SettingsView: View {
         }
     }
 
+    private func destination(for subsection: ContentView.SettingsSubsectionDestination) -> Destination {
+        switch subsection {
+        case .profile:
+            return .profile
+        case .property:
+            return .property
+        case .expenses:
+            return .expenses
+        case .team:
+            return .team
+        case .dataManagement:
+            return .dataManagement
+        }
+    }
+
+    private func handleExternalSettingsDestinationIfNeeded() {
+        guard let externalSettingsDestination else { return }
+        navigationPath = NavigationPath()
+        navigationPath.append(destination(for: externalSettingsDestination))
+        onHandledExternalSettingsDestination()
+    }
+
     // MARK: - 2) View
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             VStack(spacing: 0) {
-                Theme.BrandedHeaderView(title: "Settings")
+                Theme.BrandedHeaderView(title: "Settings") {
+                    Theme.HeaderActionButton(systemImageName: "magnifyingglass", action: onSearchTapped)
+                }
 
                 List {
                     Section {
-                        NavigationLink {
-                            ProfileSettingsView()
-                        } label: {
+                        NavigationLink(value: Destination.profile) {
                             Label("Profile", systemImage: "person.crop.circle")
                         }
 
-                        NavigationLink {
-                            PropertySettingsView()
-                        } label: {
+                        NavigationLink(value: Destination.property) {
                             Label("Property", systemImage: "house")
                         }
 
-                        NavigationLink {
-                            ExpenseSettingsView()
-                        } label: {
+                        NavigationLink(value: Destination.expenses) {
                             Label("Expenses", systemImage: "dollarsign.circle")
                         }
 
-                        NavigationLink {
-                            TeamSettingsView()
-                        } label: {
+                        NavigationLink(value: Destination.team) {
                             Label("Team", systemImage: "person.3")
                         }
 
-                        NavigationLink {
-                            DataManagementSettingsView()
-                        } label: {
+                        NavigationLink(value: Destination.dataManagement) {
                             Label("Data Management", systemImage: "tray.2")
                         }
                     } footer: {
@@ -89,6 +125,24 @@ struct SettingsView: View {
             .onAppear {
                 debugLog("Appeared")
                 performInitialSettingsSessionRefreshIfNeeded()
+                handleExternalSettingsDestinationIfNeeded()
+            }
+            .onChange(of: externalSettingsDestination) { _, _ in
+                handleExternalSettingsDestinationIfNeeded()
+            }
+            .navigationDestination(for: Destination.self) { destination in
+                switch destination {
+                case .profile:
+                    ProfileSettingsView()
+                case .property:
+                    PropertySettingsView()
+                case .expenses:
+                    ExpenseSettingsView()
+                case .team:
+                    TeamSettingsView()
+                case .dataManagement:
+                    DataManagementSettingsView()
+                }
             }
         }
     }
@@ -1937,7 +1991,7 @@ private struct DataManagementSettingsView: View {
                 Button(role: .destructive) {
                     isShowingDeleteAllBookingConfirmation = true
                 } label: {
-                    Label("Delete all reservation data", systemImage: "trash")
+                Label("Delete all reservation data", systemImage: "trash")
                 }
 
                 Button(role: .destructive) {

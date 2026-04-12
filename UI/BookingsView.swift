@@ -13,6 +13,9 @@ import CoreData
 
 struct BookingsView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    let onSearchTapped: () -> Void
+    let externalBookingSelectionID: UUID?
+    let onHandledExternalBookingSelection: () -> Void
 
     private static let bookingCSVHeaders: [String] = [
         "Property",
@@ -730,6 +733,9 @@ struct BookingsView: View {
     @State private var selectedYears: Set<Int> = []
     /// Empty set == All
     @State private var selectedStatuses: Set<ReservationStatus> = []
+    @State private var searchText: String = ""
+    @State private var recentSearches: [String] = []
+    @FocusState private var isSearchFieldFocused: Bool
 
     // MARK: - 1.4 Selection + Sheets
 
@@ -743,6 +749,16 @@ struct BookingsView: View {
 
     @State private var isShowingYearPicker: Bool = false
     @State private var isShowingStatusPicker: Bool = false
+
+    init(
+        onSearchTapped: @escaping () -> Void = {},
+        externalBookingSelectionID: UUID? = nil,
+        onHandledExternalBookingSelection: @escaping () -> Void = {}
+    ) {
+        self.onSearchTapped = onSearchTapped
+        self.externalBookingSelectionID = externalBookingSelectionID
+        self.onHandledExternalBookingSelection = onHandledExternalBookingSelection
+    }
 
     // MARK: - 1.5 Derived
 
@@ -851,6 +867,7 @@ struct BookingsView: View {
             }
             .filter { selectedYears.isEmpty ? true : selectedYears.contains($0.year) }
             .filter { selectedStatuses.isEmpty ? true : selectedStatuses.contains($0.status) }
+            .filter(matchesSearch)
             .sorted { $0.startDate > $1.startDate }
     }
 
@@ -864,6 +881,78 @@ struct BookingsView: View {
         if selectedStatuses.isEmpty { return "All" }
         if Set(selectedStatuses) == Set(ReservationStatus.allCases) { return "All" }
         return selectedStatuses.map { $0.rawValue }.sorted().joined(separator: ", ")
+    }
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var shouldShowRecentSearches: Bool {
+        isSearchFieldFocused && trimmedSearchText.isEmpty && !recentSearches.isEmpty
+    }
+
+    private func matchesSearch(_ reservation: Reservation) -> Bool {
+        let query = trimmedSearchText
+        guard !query.isEmpty else { return true }
+
+        let searchTerms = [
+            reservation.renterFirstName,
+            reservation.renterLastName,
+            reservation.renterDisplayName,
+            reservation.emailAddress,
+            reservation.phoneNumber,
+            reservation.notes,
+            reservation.bookingReason,
+            reservation.propertyName,
+            reservation.bookingSource,
+            reservation.status.rawValue
+        ]
+
+        return searchTerms.contains {
+            $0.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func loadRecentSearches() {
+        let savedSearches = UserDefaults.standard.stringArray(forKey: "recent_searches_bookings") ?? []
+        recentSearches = Array(savedSearches.prefix(5))
+    }
+
+    private func saveRecentSearches(_ searches: [String]) {
+        let limitedSearches = Array(searches.prefix(5))
+        recentSearches = limitedSearches
+        UserDefaults.standard.set(limitedSearches, forKey: "recent_searches_bookings")
+    }
+
+    private func recordRecentSearch(_ rawValue: String) {
+        let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+
+        var updatedSearches = recentSearches.filter {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(trimmedValue) != .orderedSame
+        }
+        updatedSearches.insert(trimmedValue, at: 0)
+        saveRecentSearches(updatedSearches)
+    }
+
+    private func commitSearchIfNeeded() {
+        let trimmedValue = trimmedSearchText
+        guard !trimmedValue.isEmpty else { return }
+        searchText = trimmedValue
+        recordRecentSearch(trimmedValue)
+    }
+
+    private func applyRecentSearch(_ search: String) {
+        let trimmedValue = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return }
+        searchText = trimmedValue
+        recordRecentSearch(trimmedValue)
+        isSearchFieldFocused = true
+    }
+
+    private func clearRecentSearches() {
+        recentSearches = []
+        UserDefaults.standard.removeObject(forKey: "recent_searches_bookings")
     }
 
     static func makeBookingsCSVExportFile(context: NSManagedObjectContext) throws -> URL {
@@ -910,6 +999,8 @@ struct BookingsView: View {
                 HStack(spacing: 12) {
                     Theme.BrandedHeaderView(title: "Bookings")
 
+                    Theme.HeaderActionButton(systemImageName: "magnifyingglass", action: onSearchTapped)
+
                     Button {
                         beginNewReservation()
                     } label: {
@@ -926,6 +1017,42 @@ struct BookingsView: View {
                 .background(Theme.Colors.crimson)
 
                 List {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            BookingsInlineSearchField(
+                                text: $searchText,
+                                placeholder: "Search reservations",
+                                isFocused: $isSearchFieldFocused,
+                                onSubmit: commitSearchIfNeeded
+                            )
+
+                            if shouldShowRecentSearches {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(recentSearches, id: \.self) { recentSearch in
+                                        Button {
+                                            applyRecentSearch(recentSearch)
+                                        } label: {
+                                            HStack {
+                                                Text(recentSearch)
+                                                    .foregroundStyle(.primary)
+                                                Spacer()
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
+                                    Button("Clear Recent Searches") {
+                                        clearRecentSearches()
+                                    }
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    }
+
                     // 2) Filters
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
@@ -1034,6 +1161,13 @@ struct BookingsView: View {
             }
             // Hide the system nav bar so only the branded header is shown.
             .toolbar(.hidden, for: .navigationBar)
+            .onAppear {
+                loadRecentSearches()
+                handleExternalBookingSelectionIfNeeded()
+            }
+            .onChange(of: externalBookingSelectionID) { _, _ in
+                handleExternalBookingSelectionIfNeeded()
+            }
             .sheet(isPresented: $isShowingYearPicker) {
                 NavigationStack {
                     YearsPickerSheet(
@@ -1155,6 +1289,17 @@ struct BookingsView: View {
     }
 
     // MARK: - 1.8 Selection + Draft
+
+    private func handleExternalBookingSelectionIfNeeded() {
+        guard let externalBookingSelectionID else { return }
+        defer { onHandledExternalBookingSelection() }
+
+        guard let reservation = allReservations.first(where: { $0.id == externalBookingSelectionID }) else {
+            return
+        }
+
+        selectReservation(reservation)
+    }
 
     private func selectReservation(_ reservation: Reservation) {
         selectedReservationID = reservation.id
@@ -1339,6 +1484,45 @@ struct BookingsView: View {
     }
 }
 
+private struct BookingsInlineSearchField: View {
+    @Binding var text: String
+    let placeholder: String
+    @FocusState.Binding var isFocused: Bool
+    let onSubmit: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField(placeholder, text: $text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($isFocused)
+                .onSubmit(onSubmit)
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 // MARK: - 2) Basic UI Components (Theme-independent)
 
 private struct ReservationRowBasic: View {
@@ -1427,6 +1611,7 @@ private struct YearsPickerSheet: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { onDone() }
+                    .foregroundColor(.white)
             }
         }
     }
@@ -1471,6 +1656,7 @@ private struct StatusesPickerSheet: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { onDone() }
+                    .foregroundColor(.white)
             }
         }
     }

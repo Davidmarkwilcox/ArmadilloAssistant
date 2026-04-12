@@ -104,13 +104,25 @@ enum Theme {
 
     /// Standard branded header used by all top-level screens.
     /// Matches the header sizing/spacing currently used by Bookings + Settings.
-    struct BrandedHeaderView: View {
+    struct BrandedHeaderView<Accessory: View>: View {
         let title: String
+        let accessory: Accessory
+
+        init(title: String, @ViewBuilder accessory: () -> Accessory) {
+            self.title = title
+            self.accessory = accessory()
+        }
 
         var body: some View {
             ZStack {
                 Theme.Colors.crimson
                     .ignoresSafeArea(edges: .top)
+
+                HStack {
+                    Spacer()
+                    accessory
+                }
+                .padding(.horizontal, Theme.Spacing.m)
 
                 VStack(spacing: 2) {
                     // Brand lockup
@@ -132,6 +144,33 @@ enum Theme {
             .frame(height: 96)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Text(title))
+        }
+    }
+
+    struct HeaderActionButton: View {
+        let systemImageName: String
+        let action: () -> Void
+
+        var body: some View {
+            Button(action: action) {
+                Image(systemName: systemImageName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(Color.white.opacity(0.14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    struct EmptyHeaderAccessory: View {
+        var body: some View {
+            EmptyView()
         }
     }
 
@@ -346,5 +385,13 @@ extension View {
 
     func themeWatermark() -> some View {
         overlay(Theme.WatermarkView().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing))
+    }
+}
+
+extension Theme.BrandedHeaderView where Accessory == Theme.EmptyHeaderAccessory {
+    init(title: String) {
+        self.init(title: title) {
+            Theme.EmptyHeaderAccessory()
+        }
     }
 }
