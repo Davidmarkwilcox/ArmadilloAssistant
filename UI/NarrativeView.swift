@@ -12,6 +12,7 @@
 //  NOTE: Calculations will be sourced from NarrativeCalculations.swift in a later step.
 //
 
+import CoreData
 import SwiftUI
 
 // MARK: - 1. NarrativeView
@@ -19,14 +20,22 @@ import SwiftUI
 // MARK: - 1.0 Models (Prototype)
 
 enum Property: String, CaseIterable, Identifiable, Hashable {
-    case mainStreet = "Main Street"
     case barndo = "Barndo"
-    case alamo = "Alamo"
+    case main = "Main"
+    case washington = "Washington"
 
     var id: String { rawValue }
 }
 
 struct NarrativeView: View {
+    @FetchRequest(
+        sortDescriptors: [
+            NSSortDescriptor(key: "checkInDate", ascending: false),
+            NSSortDescriptor(key: "createdAt", ascending: false)
+        ],
+        animation: .default
+    ) private var storedBookings: FetchedResults<Booking>
+
     private static let recentSearchesKey = "recent_searches_narrative"
     static let allNarratives: [NarrativeItem] = [
         NarrativeItem(id: "inquiries_this_month", title: "How many inquiries this month?"),
@@ -73,10 +82,7 @@ struct NarrativeView: View {
     
     @State private var selectedNarrative: NarrativeItem?
     
-    // Placeholder options (prototype only)
     private let properties = Property.allCases
-    private let years = [2023, 2024, 2025, 2026]
-    
     private let narratives = Self.allNarratives
 
     init(
@@ -90,7 +96,12 @@ struct NarrativeView: View {
     }
     
     private var availableYears: [Int] {
-        years.sorted(by: >)
+        let bookingYears: Set<Int> = Set(storedBookings.compactMap { booking in
+            guard let checkInDate = booking.checkInDate else { return nil }
+            return Calendar.current.component(.year, from: checkInDate)
+        })
+        let years = bookingYears.sorted(by: >)
+        return years.isEmpty ? [Calendar.current.component(.year, from: Date())] : years
     }
 
     private var trimmedSearchText: String {
@@ -164,9 +175,16 @@ struct NarrativeView: View {
     }
 
     private var yearsButtonSubtitle: String {
-        if selectedYears.isEmpty { return "All" }
-        if Set(selectedYears) == Set(availableYears) { return "All" }
-        return selectedYears.sorted(by: >).map(String.init).joined(separator: ", ")
+        if selectedYears.isEmpty {
+            return "Current Year"
+        }
+
+        if selectedYears.count == 1, let year = selectedYears.first {
+            return String(year)
+        }
+
+        let latestYear = selectedYears.max() ?? Calendar.current.component(.year, from: Date())
+        return "\(latestYear) (latest of \(selectedYears.count) selected)"
     }
 
     private func isPropertySelected(_ property: Property) -> Bool {
@@ -179,6 +197,32 @@ struct NarrativeView: View {
         } else {
             selectedProperties.insert(property)
         }
+    }
+
+    private var narrativeBookings: [Booking] {
+        Array(storedBookings)
+    }
+
+    private var selectedNarrativeProperties: Set<String> {
+        Set(selectedProperties.map { property in
+            switch property {
+            case .barndo:
+                return "Barndo"
+            case .main:
+                return "Main Street"
+            case .washington:
+                return "Washington"
+            }
+        })
+    }
+
+    private func narrativeText(for narrative: NarrativeItem) -> String {
+        NarrativeCalculations.text(
+            for: narrative.id,
+            bookings: narrativeBookings,
+            selectedProperties: selectedNarrativeProperties,
+            selectedYears: selectedYears
+        )
     }
 
     private func filterChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -254,9 +298,9 @@ struct NarrativeView: View {
                                     .foregroundStyle(.secondary)
 
                                 HStack(spacing: 10) {
-                                    filterChip(title: Property.mainStreet.rawValue, isSelected: isPropertySelected(.mainStreet)) { toggleProperty(.mainStreet) }
                                     filterChip(title: Property.barndo.rawValue, isSelected: isPropertySelected(.barndo)) { toggleProperty(.barndo) }
-                                    filterChip(title: Property.alamo.rawValue, isSelected: isPropertySelected(.alamo)) { toggleProperty(.alamo) }
+                                    filterChip(title: Property.main.rawValue, isSelected: isPropertySelected(.main)) { toggleProperty(.main) }
+                                    filterChip(title: Property.washington.rawValue, isSelected: isPropertySelected(.washington)) { toggleProperty(.washington) }
                                 }
                             }
 
@@ -336,7 +380,7 @@ struct NarrativeView: View {
                 }
             }
             .sheet(item: $selectedNarrative) { narrative in
-                NarrativeDetailView(narrative: narrative)
+                NarrativeDetailView(narrative: narrative, narrativeText: narrativeText(for: narrative))
             }
         }
     }
@@ -392,6 +436,7 @@ struct NarrativeItem: Identifiable {
 
 struct NarrativeDetailView: View {
     let narrative: NarrativeItem
+    let narrativeText: String
     
     var body: some View {
         NavigationView {
@@ -400,8 +445,8 @@ struct NarrativeDetailView: View {
                     .font(.title2)
                     .bold()
                 
-                Text("Narrative calculations will be generated via NarrativeCalculations.swift.")
-                    .foregroundColor(.secondary)
+                Text(narrativeText)
+                    .foregroundColor(.primary)
                 
                 Spacer()
             }
@@ -410,7 +455,7 @@ struct NarrativeDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     ShareLink(
-                        item: narrative.title,
+                        item: "\(narrative.title)\n\n\(narrativeText)",
                         subject: Text("Narrative Report")
                     ) {
                         Image(systemName: "square.and.arrow.up")
@@ -448,19 +493,18 @@ private struct YearsPickerSheet: View {
                     ))
                 }
 
-                Button(isAllSelected ? "Clear All" : "Select All") {
+                Button(isAllSelected ? "Use Current Year" : "Select All Years") {
                     if isAllSelected {
-                        // Clear filters (main view interprets empty as All)
                         selectedYears = []
                     } else {
                         selectedYears = allYearsSet
                     }
                 }
-            }
-        }
-        .onAppear {
-            if selectedYears.isEmpty {
-                selectedYears = allYearsSet
+                .foregroundStyle(.secondary)
+
+                Text("If multiple years are selected, narratives use the most recent selected year.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .toolbar {
