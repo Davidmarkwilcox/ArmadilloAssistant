@@ -414,9 +414,17 @@ private extension NarrativeCalculations {
         let mainAlamoCount = count(for: stayCountStatuses, in: scopedBookings.filter { $0.property == "Main Street" })
         let washingtonCount = count(for: stayCountStatuses, in: scopedBookings.filter { $0.property == "Washington" })
 
-        let barndoPercent = total > 0 ? formatWholePercent(Double(barndoCount) / Double(total)) : formatWholePercent(0)
-        let mainAlamoPercent = total > 0 ? formatWholePercent(Double(mainAlamoCount) / Double(total)) : formatWholePercent(0)
-        let washingtonPercent = total > 0 ? formatWholePercent(Double(washingtonCount) / Double(total)) : formatWholePercent(0)
+        let shouldUseDecimalPercentages = relativeMonth == .previous
+        let percentFormatter: (Double) -> String = { value in
+            if shouldUseDecimalPercentages {
+                return formatPercent(value)
+            }
+            return formatWholePercent(value)
+        }
+
+        let barndoPercent = total > 0 ? percentFormatter(Double(barndoCount) / Double(total)) : percentFormatter(0)
+        let mainAlamoPercent = total > 0 ? percentFormatter(Double(mainAlamoCount) / Double(total)) : percentFormatter(0)
+        let washingtonPercent = total > 0 ? percentFormatter(Double(washingtonCount) / Double(total)) : percentFormatter(0)
 
         let lead: String
         switch relativeMonth {
@@ -470,16 +478,35 @@ private extension NarrativeCalculations {
         let mainAlamoRevenue = totalRevenue(for: inquiredRevenueStatuses, in: scopedBookings.filter { $0.property == "Main Street" })
         let washingtonRevenue = totalRevenue(for: inquiredRevenueStatuses, in: scopedBookings.filter { $0.property == "Washington" })
 
+        let totalMarginAmount = totalMargin(for: inquiredRevenueStatuses, in: scopedBookings)
+        let barndoMargin = totalMargin(for: inquiredRevenueStatuses, in: scopedBookings.filter { $0.property == "Barndo" })
+        let mainAlamoMargin = totalMargin(for: inquiredRevenueStatuses, in: scopedBookings.filter { $0.property == "Main Street" })
+        let washingtonMargin = totalMargin(for: inquiredRevenueStatuses, in: scopedBookings.filter { $0.property == "Washington" })
+
         let barndoPercent = total > 0 ? formatPercent(barndoRevenue / total) : formatPercent(0)
         let mainAlamoPercent = total > 0 ? formatPercent(mainAlamoRevenue / total) : formatPercent(0)
         let washingtonPercent = total > 0 ? formatPercent(washingtonRevenue / total) : formatPercent(0)
 
+        let barndoMarginPercent = totalMarginAmount > 0 ? formatPercent(barndoMargin / totalMarginAmount) : formatPercent(0)
+        let mainAlamoMarginPercent = totalMarginAmount > 0 ? formatPercent(mainAlamoMargin / totalMarginAmount) : formatPercent(0)
+        let washingtonMarginPercent = totalMarginAmount > 0 ? formatPercent(washingtonMargin / totalMarginAmount) : formatPercent(0)
+
+        let revenueParagraph: String
+        let marginParagraph: String
+
         switch relativeMonth {
         case .current:
-            return "So far for this month, the potential revenue from our inquiries and bookings is \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+            revenueParagraph = "So far for this month, the potential revenue from our inquiries and bookings is \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+
+            marginParagraph = "So far for this month, the potential margins from our inquiries and bookings are \(formatCompactCurrency(totalMarginAmount)). \(formatCompactCurrency(barndoMargin)) at the Barndo (\(barndoMarginPercent)), \(formatCompactCurrency(mainAlamoMargin)) at Main/Alamo (\(mainAlamoMarginPercent)), and \(formatCompactCurrency(washingtonMargin)) at Washington (\(washingtonMarginPercent))."
+
         case .previous:
-            return "Last month, the potential revenue from our inquiries and bookings was \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+            revenueParagraph = "Last month, the potential revenue from our inquiries and bookings was \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+
+            marginParagraph = "Last month, the potential margins from our inquiries and bookings were \(formatCompactCurrency(totalMarginAmount)). \(formatCompactCurrency(barndoMargin)) at the Barndo (\(barndoMarginPercent)), \(formatCompactCurrency(mainAlamoMargin)) at Main/Alamo (\(mainAlamoMarginPercent)), and \(formatCompactCurrency(washingtonMargin)) at Washington (\(washingtonMarginPercent))."
         }
+
+        return "\(revenueParagraph)\n\n\(marginParagraph)"
     }
 
     static func relativeMonthBookedRevenueNarrative(for relativeMonth: RelativeMonth, bookings: [NormalizedBooking], now: Date, calendar: Calendar) -> String {
@@ -491,16 +518,35 @@ private extension NarrativeCalculations {
         let mainAlamoRevenue = totalRevenue(for: bookedRevenueStatuses, in: scopedBookings.filter { $0.property == "Main Street" })
         let washingtonRevenue = totalRevenue(for: bookedRevenueStatuses, in: scopedBookings.filter { $0.property == "Washington" })
 
+        let totalMarginAmount = totalMargin(for: bookedRevenueStatuses, in: scopedBookings)
+        let barndoMargin = totalMargin(for: bookedRevenueStatuses, in: scopedBookings.filter { $0.property == "Barndo" })
+        let mainAlamoMargin = totalMargin(for: bookedRevenueStatuses, in: scopedBookings.filter { $0.property == "Main Street" })
+        let washingtonMargin = totalMargin(for: bookedRevenueStatuses, in: scopedBookings.filter { $0.property == "Washington" })
+
         let barndoPercent = total > 0 ? formatPercent(barndoRevenue / total) : formatPercent(0)
         let mainAlamoPercent = total > 0 ? formatPercent(mainAlamoRevenue / total) : formatPercent(0)
         let washingtonPercent = total > 0 ? formatPercent(washingtonRevenue / total) : formatPercent(0)
 
+        let barndoMarginPercent = totalMarginAmount > 0 ? formatPercent(barndoMargin / totalMarginAmount) : formatPercent(0)
+        let mainAlamoMarginPercent = totalMarginAmount > 0 ? formatPercent(mainAlamoMargin / totalMarginAmount) : formatPercent(0)
+        let washingtonMarginPercent = totalMarginAmount > 0 ? formatPercent(washingtonMargin / totalMarginAmount) : formatPercent(0)
+
+        let revenueParagraph: String
+        let marginParagraph: String
+
         switch relativeMonth {
         case .current:
-            return "So far for this month, the potential revenue that has been booked from inquiries is \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+            revenueParagraph = "So far for this month, the potential revenue that has been booked from inquiries is \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+
+            marginParagraph = "So far for this month, the potential margins that have been booked from inquiries are \(formatCompactCurrency(totalMarginAmount)). \(formatCompactCurrency(barndoMargin)) at the Barndo (\(barndoMarginPercent)), \(formatCompactCurrency(mainAlamoMargin)) at Main/Alamo (\(mainAlamoMarginPercent)), and \(formatCompactCurrency(washingtonMargin)) at Washington (\(washingtonMarginPercent))."
+
         case .previous:
-            return "Last month, the potential revenue that was booked from inquiries was \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+            revenueParagraph = "Last month, the potential revenue that was booked from inquiries was \(formatCompactCurrency(total)). \(formatCompactCurrency(barndoRevenue)) at the Barndo (\(barndoPercent)), \(formatCompactCurrency(mainAlamoRevenue)) at Main/Alamo (\(mainAlamoPercent)), and \(formatCompactCurrency(washingtonRevenue)) at Washington (\(washingtonPercent))."
+
+            marginParagraph = "Last month, the potential margins that were booked from inquiries were \(formatCompactCurrency(totalMarginAmount)). \(formatCompactCurrency(barndoMargin)) at the Barndo (\(barndoMarginPercent)), \(formatCompactCurrency(mainAlamoMargin)) at Main/Alamo (\(mainAlamoMarginPercent)), and \(formatCompactCurrency(washingtonMargin)) at Washington (\(washingtonMarginPercent))."
         }
+
+        return "\(revenueParagraph)\n\n\(marginParagraph)"
     }
 
     static func bookingsOverviewNarrative(bookings: [NormalizedBooking], selectedYears: Set<Int>, now: Date, calendar: Calendar) -> String {
