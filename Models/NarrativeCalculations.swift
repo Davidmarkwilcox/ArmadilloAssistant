@@ -74,6 +74,7 @@ private extension NarrativeCalculations {
         let status: String
         let createdAt: Date?
         let inquiryDate: Date?
+        let checkInDate: Date?
         let checkOutDate: Date?
         let revenue: Double
         let margin: Double
@@ -123,6 +124,7 @@ private extension NarrativeCalculations {
             status: (booking.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
             createdAt: booking.createdAt,
             inquiryDate: booking.inquiryDate,
+            checkInDate: booking.checkInDate,
             checkOutDate: booking.checkOutDate,
             revenue: (booking.pricePerNight * Double(nights)) + booking.cleaningFee,
             margin: booking.pricePerNight * Double(nights),
@@ -260,12 +262,12 @@ private extension NarrativeCalculations {
             guard
                 !leadTimeExcludedStatuses.contains(booking.status),
                 let inquiryDate = booking.inquiryDate,
-                let checkOutDate = booking.checkOutDate
+                let checkInDate = booking.checkInDate
             else {
                 return nil
             }
 
-            let days = calendar.dateComponents([.day], from: inquiryDate, to: checkOutDate).day ?? 0
+            let days = calendar.dateComponents([.day], from: inquiryDate, to: checkInDate).day ?? 0
             return days >= 0 ? days : nil
         }
 
@@ -336,6 +338,11 @@ private extension NarrativeCalculations {
             let head = phrases.dropLast().joined(separator: ", ")
             return "\(head), and \(phrases.last ?? "")"
         }
+    }
+
+    static func commaSeparatedYearLabel(_ years: [Int]) -> String {
+        let labels = years.map(String.init)
+        return oxfordJoin(labels)
     }
 
     static func countBreakdownSentence(total: Int, values: [(property: String, value: Int)]) -> String {
@@ -608,15 +615,32 @@ private extension NarrativeCalculations {
     }
 
     static func leadTimeNarrative(bookings: [NormalizedBooking], selectedYears: Set<Int>, now: Date, calendar: Calendar) -> String {
-        let year = yearScope(from: selectedYears, now: now, calendar: calendar)
-        let scopedBookings = bookingsForYear(year, bookings: bookings, calendar: calendar)
+        let years = yearScopes(from: selectedYears, now: now, calendar: calendar)
+        let scopedBookings = bookingsForYears(years, bookings: bookings, calendar: calendar)
         guard !scopedBookings.isEmpty else { return noDataInScopeSentence() }
 
-        guard let averageLeadTime = averageLeadTime(bookings: scopedBookings, calendar: calendar) else {
-            return "For \(year), there is not enough inquiry timing data to summarize lead time yet."
+        let yearLabel = commaSeparatedYearLabel(years)
+
+        guard let overallAverageLeadTime = averageLeadTime(bookings: scopedBookings, calendar: calendar) else {
+            return "For \(yearLabel), there is not enough inquiry timing data to summarize lead time yet."
         }
 
-        return "In \(year), guests inquired an average of \(formatCount(Int(averageLeadTime.rounded()))) days before check-in."
+        let propertyBreakdowns = propertyOrder.compactMap { property -> String? in
+            let propertyBookings = scopedBookings.filter { $0.property == property }
+            guard let propertyAverageLeadTime = averageLeadTime(bookings: propertyBookings, calendar: calendar) else {
+                return nil
+            }
+
+            return "\(bookingsNarrativePropertyLabel(for: property)) is inquired about \(formatCount(Int(propertyAverageLeadTime.rounded()))) days in advance"
+        }
+
+        let totalLeadDays = formatCount(Int(overallAverageLeadTime.rounded()))
+
+        if propertyBreakdowns.count <= 1 {
+            return "In general for \(yearLabel), people inquired about \(propertyBreakdowns.first?.replacingOccurrences(of: " is inquired about", with: "") ?? "our properties") \(totalLeadDays) days in advance of their stay."
+        }
+
+        return "In general for \(yearLabel), people inquired about our properties \(totalLeadDays) days in advance of their stay. \(oxfordJoin(propertyBreakdowns))."
     }
 
     static func monthlyOverviewNarrative(id: String, bookings: [NormalizedBooking], selectedYears: Set<Int>, now: Date, calendar: Calendar) -> String {
@@ -628,24 +652,28 @@ private extension NarrativeCalculations {
         let scopedBookings = bookingsForMonth(month, year: year, bookings: bookings, calendar: calendar)
         guard !scopedBookings.isEmpty else { return noDataInScopeSentence() }
 
+        let monthlyInquiryStatuses = ["Inquired", "Booked", "Completed", "Cancelled"]
+
         let totalBookings = count(for: stayCountStatuses, in: scopedBookings)
         let totalBookedRevenue = totalRevenue(for: bookedRevenueStatuses, in: scopedBookings)
-        let totalInquiries = scopedBookings.count
+        let totalBookedMargin = totalMargin(for: bookedRevenueStatuses, in: scopedBookings)
+        let totalInquiries = count(for: monthlyInquiryStatuses, in: scopedBookings)
 
         var sentences = [
-            "In \(monthName(for: month)), \(year): a total of \(formatCount(totalBookings)) bookings for \(formatCompactCurrency(totalBookedRevenue)) out of \(formatCount(totalInquiries)) inquiries."
+            "In \(monthName(for: month)), \(year): a total of \(formatCount(totalBookings)) bookings for \(formatCompactCurrency(totalBookedRevenue)) in revenue and \(formatCompactCurrency(totalBookedMargin)) in margin out of \(formatCount(totalInquiries)) inquiries."
         ]
 
         for property in propertyOrder {
             let propertyBookings = scopedBookings.filter { $0.property == property }
             let propertyBookingCount = count(for: stayCountStatuses, in: propertyBookings)
             let propertyRevenue = totalRevenue(for: bookedRevenueStatuses, in: propertyBookings)
-            let propertyInquiryCount = propertyBookings.count
+            let propertyMargin = totalMargin(for: bookedRevenueStatuses, in: propertyBookings)
+            let propertyInquiryCount = count(for: monthlyInquiryStatuses, in: propertyBookings)
 
-            guard propertyBookingCount > 0 || propertyRevenue > 0 || propertyInquiryCount > 0 else { continue }
+            guard propertyBookingCount > 0 || propertyRevenue > 0 || propertyMargin > 0 || propertyInquiryCount > 0 else { continue }
 
             sentences.append(
-                "For \(propertyReference(for: property)), \(formatCount(propertyBookingCount)) bookings for \(formatCompactCurrency(propertyRevenue)) out of \(formatCount(propertyInquiryCount)) inquiries."
+                "For \(propertyReference(for: property)), \(formatCount(propertyBookingCount)) bookings for \(formatCompactCurrency(propertyRevenue)) in revenue and \(formatCompactCurrency(propertyMargin)) in margin out of \(formatCount(propertyInquiryCount)) inquiries."
             )
         }
 
