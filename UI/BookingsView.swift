@@ -300,6 +300,141 @@ struct BookingsView: View {
         }
     }
 
+    struct HotelTaxOccupancyReportCSVExporter {
+        private static let headers: [String] = [
+            "Booking Source",
+            "Property",
+            "Guest Name",
+            "Check-In Date",
+            "Check-Out Date",
+            "Number of Nights",
+            "Revenue per Night",
+            "Cleaning Fee",
+            "Tax",
+            "Total Revenue Received"
+        ]
+
+        private static let dateFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter
+        }()
+
+        private static let decimalFormatter: NumberFormatter = {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.usesGroupingSeparator = false
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 2
+            return formatter
+        }()
+
+        private static let fileNameFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone.current
+            formatter.dateFormat = "yyyyMMdd-HHmm"
+            return formatter
+        }()
+
+        static func fetchBookings(
+            context: NSManagedObjectContext,
+            startDate: Date,
+            endDate: Date
+        ) throws -> [Booking] {
+            let calendar = Calendar.current
+            let startOfDay = calendar.startOfDay(for: startDate)
+            let endOfDay = calendar.startOfDay(for: endDate)
+            let exclusiveEndDate = calendar.date(byAdding: .day, value: 1, to: endOfDay) ?? endOfDay
+
+            let request: NSFetchRequest<Booking> = Booking.fetchRequest()
+            request.predicate = NSPredicate(
+                format: "checkInDate >= %@ AND checkInDate < %@",
+                startOfDay as NSDate,
+                exclusiveEndDate as NSDate
+            )
+            request.sortDescriptors = [
+                NSSortDescriptor(keyPath: \Booking.checkInDate, ascending: true),
+                NSSortDescriptor(keyPath: \Booking.propertyName, ascending: true),
+                NSSortDescriptor(keyPath: \Booking.renterLastName, ascending: true)
+            ]
+            return try context.fetch(request)
+        }
+
+        static func csvString(from bookings: [Booking]) -> String {
+            let headerRow = headers.map(csvEscaped).joined(separator: ",")
+            let rows = bookings.map { booking in
+                let nights = numberOfNights(for: booking)
+                let totalRevenueReceived = (Double(nights) * booking.pricePerNight) + booking.cleaningFee + booking.taxAmount
+                let columns: [String] = [
+                    booking.bookingSource ?? "",
+                    booking.propertyName ?? "",
+                    guestName(for: booking),
+                    formattedDate(booking.checkInDate),
+                    formattedDate(booking.checkOutDate),
+                    String(nights),
+                    formattedDecimalValue(booking.pricePerNight),
+                    formattedDecimalValue(booking.cleaningFee),
+                    formattedDecimalValue(booking.taxAmount),
+                    formattedDecimalValue(totalRevenueReceived)
+                ]
+                return columns.map(csvEscaped).joined(separator: ",")
+            }
+
+            return ([headerRow] + rows).joined(separator: "\n")
+        }
+
+        static func writeExportFile(
+            context: NSManagedObjectContext,
+            startDate: Date,
+            endDate: Date
+        ) throws -> URL {
+            let bookings = try fetchBookings(context: context, startDate: startDate, endDate: endDate)
+            let csv = csvString(from: bookings)
+            let fileName = "HotelTaxOccupancyReport_\(fileNameFormatter.string(from: Date())).csv"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+
+            do {
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+                return url
+            } catch {
+                throw BookingCSVExportError.failedToWriteFile
+            }
+        }
+
+        private static func guestName(for booking: Booking) -> String {
+            "\(booking.renterFirstName ?? "") \(booking.renterLastName ?? "")"
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        private static func numberOfNights(for booking: Booking) -> Int {
+            guard let checkInDate = booking.checkInDate, let checkOutDate = booking.checkOutDate else {
+                return 0
+            }
+
+            return max(0, Calendar.current.dateComponents([.day], from: checkInDate, to: checkOutDate).day ?? 0)
+        }
+
+        private static func formattedDate(_ date: Date?) -> String {
+            guard let date else { return "" }
+            return dateFormatter.string(from: date)
+        }
+
+        private static func formattedDecimalValue(_ value: Double) -> String {
+            decimalFormatter.string(from: NSNumber(value: value)) ?? "0"
+        }
+
+        private nonisolated static func csvEscaped(_ value: String) -> String {
+            let escaped = value.replacingOccurrences(of: "\"", with: "\"\"")
+            return "\"\(escaped)\""
+        }
+    }
+
     struct BookingCSVImporter {
         private static let headers = BookingsView.bookingCSVHeaders
 
@@ -959,6 +1094,18 @@ struct BookingsView: View {
         try BookingCSVExporter.writeExportFile(context: context)
     }
 
+    static func makeHotelTaxOccupancyReportCSVExportFile(
+        context: NSManagedObjectContext,
+        startDate: Date,
+        endDate: Date
+    ) throws -> URL {
+        try HotelTaxOccupancyReportCSVExporter.writeExportFile(
+            context: context,
+            startDate: startDate,
+            endDate: endDate
+        )
+    }
+
     static func importBookingsCSV(from url: URL, context: NSManagedObjectContext) throws -> Int {
         print("[BookingCSVImport] Import entry")
         print("[BookingCSVImport] Selected file URL: \(url.path)")
@@ -996,9 +1143,7 @@ struct BookingsView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Theme.BrandedHeaderView(title: "Bookings")
-
+                Theme.BrandedHeaderView(title: "Bookings") {
                     Theme.HeaderActionButton(systemImageName: "magnifyingglass", action: onSearchTapped)
 
                     Button {
@@ -1014,7 +1159,6 @@ struct BookingsView: View {
                     .padding(.trailing, 12)
                     .disabled(propertyOptions.isEmpty)
                 }
-                .background(Theme.Colors.crimson)
 
                 List {
                     Section {

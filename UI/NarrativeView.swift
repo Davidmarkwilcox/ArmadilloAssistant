@@ -460,6 +460,7 @@ struct NarrativeDetailView: View {
                     ) {
                         Image(systemName: "square.and.arrow.up")
                     }
+                    .foregroundColor(.white)
                 }
             }
         }
@@ -510,6 +511,7 @@ private struct YearsPickerSheet: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { onDone() }
+                    .foregroundColor(.white)
             }
         }
     }

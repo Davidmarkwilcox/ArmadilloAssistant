@@ -1848,6 +1848,9 @@ private struct DataManagementSettingsView: View {
     @State private var isShowingDeleteExpenseErrorAlert: Bool = false
     @State private var deleteExpenseSuccessMessage: String = ""
     @State private var isShowingDeleteExpenseSuccessAlert: Bool = false
+    @State private var isShowingHotelTaxReportDateSheet: Bool = false
+    @State private var hotelTaxReportStartDate: Date = Date()
+    @State private var hotelTaxReportEndDate: Date = Date()
 
     private struct ExportShareItem: Identifiable {
         let id = UUID()
@@ -1875,6 +1878,40 @@ private struct DataManagementSettingsView: View {
         do {
             let fileURL = try BookingsView.makeBookingsCSVExportFile(context: viewContext)
             exportShareItem = ExportShareItem(url: fileURL)
+        } catch {
+            exportErrorMessage = error.localizedDescription
+            isShowingExportErrorAlert = true
+        }
+    }
+
+    private func mostRecentlyCompletedMonthRange() -> (startDate: Date, endDate: Date) {
+        let calendar = Calendar.current
+        let now = Date()
+        let currentMonthStart = calendar.date(
+            from: calendar.dateComponents([.year, .month], from: now)
+        ) ?? calendar.startOfDay(for: now)
+        let previousMonthStart = calendar.date(byAdding: .month, value: -1, to: currentMonthStart) ?? currentMonthStart
+        let previousMonthEnd = calendar.date(byAdding: .day, value: -1, to: currentMonthStart) ?? previousMonthStart
+
+        return (previousMonthStart, previousMonthEnd)
+    }
+
+    private func prepareHotelTaxReportDateRange() {
+        let defaultRange = mostRecentlyCompletedMonthRange()
+        hotelTaxReportStartDate = defaultRange.startDate
+        hotelTaxReportEndDate = defaultRange.endDate
+        isShowingHotelTaxReportDateSheet = true
+    }
+
+    private func exportHotelTaxOccupancyReportCSV() {
+        do {
+            let fileURL = try BookingsView.makeHotelTaxOccupancyReportCSVExportFile(
+                context: viewContext,
+                startDate: hotelTaxReportStartDate,
+                endDate: hotelTaxReportEndDate
+            )
+            exportShareItem = ExportShareItem(url: fileURL)
+            isShowingHotelTaxReportDateSheet = false
         } catch {
             exportErrorMessage = error.localizedDescription
             isShowingExportErrorAlert = true
@@ -1963,6 +2000,12 @@ private struct DataManagementSettingsView: View {
                 } label: {
                     Label("Export expenses to CSV", systemImage: "square.and.arrow.up.on.square")
                 }
+
+                Button {
+                    prepareHotelTaxReportDateRange()
+                } label: {
+                    Label("Hotel Tax Occupancy Report", systemImage: "doc.text.magnifyingglass")
+                }
             } header: {
                 Text("Export")
             } footer: {
@@ -2008,6 +2051,44 @@ private struct DataManagementSettingsView: View {
         .navigationTitle("Data Management")
         .sheet(item: $exportShareItem) { item in
             ActivityViewSheet(activityItems: [item.url])
+        }
+        .sheet(isPresented: $isShowingHotelTaxReportDateSheet) {
+            NavigationStack {
+                Form {
+                    Section {
+                        DatePicker(
+                            "Start Date",
+                            selection: $hotelTaxReportStartDate,
+                            displayedComponents: .date
+                        )
+
+                        DatePicker(
+                            "End Date",
+                            selection: $hotelTaxReportEndDate,
+                            displayedComponents: .date
+                        )
+                    } footer: {
+                        Text("Bookings are included when their check-in date falls within the selected date range.")
+                    }
+                }
+                .navigationTitle("Hotel Tax Occupancy Report")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            isShowingHotelTaxReportDateSheet = false
+                        }
+                        .foregroundColor(.white)
+                    }
+
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Export") {
+                            exportHotelTaxOccupancyReportCSV()
+                        }
+                        .disabled(hotelTaxReportEndDate < hotelTaxReportStartDate)
+                        .foregroundColor(.white)
+                    }
+                }
+            }
         }
         .fileImporter(
             isPresented: isShowingImportPicker,

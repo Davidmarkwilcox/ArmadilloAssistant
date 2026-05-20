@@ -482,6 +482,7 @@ private struct GlobalSearchView: View {
                     Button("Close") {
                         dismiss()
                     }
+                    .foregroundColor(.white)
                 }
             }
         }
