@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24837" systemVersion="25D2128" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="24901" systemVersion="25F71" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="YES" userDefinedModelVersionIdentifier="">
+    <entity name="AppWorkspace" representedClassName=".AppWorkspace" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="createdBy" attributeType="String" defaultValueString="System"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastModifiedBy" attributeType="String" defaultValueString="System"/>
+        <attribute name="name" attributeType="String" defaultValueString="12 Armadillos Workspace"/>
+        <relationship name="expenseCategories" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="ExpenseCategory" inverseName="workspaceRef" inverseEntity="ExpenseCategory"/>
+        <relationship name="expenseProjects" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="ExpenseProject" inverseName="workspaceRef" inverseEntity="ExpenseProject"/>
+        <relationship name="expenses" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Expense" inverseName="workspaceRef" inverseEntity="Expense"/>
+        <relationship name="rentalProperties" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="RentalProperty" inverseName="workspaceRef" inverseEntity="RentalProperty"/>
+    </entity>
     <entity name="Booking" representedClassName="Booking" syncable="YES" codeGenerationType="class">
         <attribute name="bookingDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="bookingReason" optional="YES" attributeType="String"/>
@@ -32,7 +44,6 @@
         <attribute name="taxRateApplied" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <relationship name="propertyRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="RentalProperty" inverseName="bookings" inverseEntity="RentalProperty"/>
     </entity>
-    <entity name="Entity" representedClassName="Entity" syncable="YES" codeGenerationType="class"/>
     <entity name="Expense" representedClassName=".Expense" syncable="YES" codeGenerationType="class">
         <attribute name="category" attributeType="String" defaultValueString="Supplies"/>
         <attribute name="createdAt" attributeType="Date" defaultDateTimeInterval="795297720" usesScalarValueType="NO"/>
@@ -52,6 +63,7 @@
         <attribute name="reimbursementAmount" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <relationship name="categoryRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="ExpenseCategory" inverseName="expenses" inverseEntity="ExpenseCategory"/>
         <relationship name="projectRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="ExpenseProject" inverseName="expenses" inverseEntity="ExpenseProject"/>
+        <relationship name="workspaceRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="AppWorkspace" inverseName="expenses" inverseEntity="AppWorkspace"/>
     </entity>
     <entity name="ExpenseCategory" representedClassName=".ExpenseCategory" syncable="YES" codeGenerationType="class">
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
@@ -63,6 +75,7 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="expenses" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Expense" inverseName="categoryRef" inverseEntity="Expense"/>
+        <relationship name="workspaceRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="AppWorkspace" inverseName="expenseCategories" inverseEntity="AppWorkspace"/>
     </entity>
     <entity name="ExpenseProject" representedClassName=".ExpenseProject" syncable="YES" codeGenerationType="class">
         <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
@@ -74,6 +87,7 @@
         <attribute name="name" optional="YES" attributeType="String"/>
         <attribute name="sortOrder" optional="YES" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
         <relationship name="expenses" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Expense" inverseName="projectRef" inverseEntity="Expense"/>
+        <relationship name="workspaceRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="AppWorkspace" inverseName="expenseProjects" inverseEntity="AppWorkspace"/>
     </entity>
     <entity name="RentalProperty" representedClassName="RentalProperty" syncable="YES" codeGenerationType="class">
         <attribute name="bathroomCount" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
@@ -99,5 +113,6 @@
         <attribute name="streetAddress" optional="YES" attributeType="String"/>
         <attribute name="taxRateDefault" optional="YES" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <relationship name="bookings" optional="YES" toMany="YES" deletionRule="Nullify" destinationEntity="Booking" inverseName="propertyRef" inverseEntity="Booking"/>
+        <relationship name="workspaceRef" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="AppWorkspace" inverseName="rentalProperties" inverseEntity="AppWorkspace"/>
     </entity>
 </model>

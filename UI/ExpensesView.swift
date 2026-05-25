@@ -321,6 +321,7 @@ struct ExpensesView: View {
             }
 
             let now = Date()
+            let workspace = fetchWorkspace(context: context)
             let trimmedProjects = fetchProjectMap(context: context)
             let trimmedCategories = fetchCategoryMap(context: context)
 
@@ -344,6 +345,7 @@ struct ExpensesView: View {
                 expense.lastModifiedBy = "CSV Import"
                 expense.projectRef = trimmedProjects[parsedRow.project.trimmingCharacters(in: .whitespacesAndNewlines)]
                 expense.categoryRef = trimmedCategories[parsedRow.category.trimmingCharacters(in: .whitespacesAndNewlines)]
+                expense.workspaceRef = workspace
             }
 
             do {
@@ -354,6 +356,17 @@ struct ExpensesView: View {
             }
 
             return parsedRows.count
+        }
+
+        private static func fetchWorkspace(context: NSManagedObjectContext) -> AppWorkspace? {
+            let request: NSFetchRequest<AppWorkspace> = AppWorkspace.fetchRequest()
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "createdAt", ascending: true),
+                NSSortDescriptor(key: "name", ascending: true)
+            ]
+            request.fetchLimit = 1
+
+            return try? context.fetch(request).first
         }
 
         private static func fetchProjectMap(context: NSManagedObjectContext) -> [String: ExpenseProject] {
@@ -707,6 +720,17 @@ struct ExpensesView: View {
         )
     }
 
+    private func fetchWorkspaceForNewExpense() -> AppWorkspace? {
+        let request: NSFetchRequest<AppWorkspace> = AppWorkspace.fetchRequest()
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "createdAt", ascending: true),
+            NSSortDescriptor(key: "name", ascending: true)
+        ]
+        request.fetchLimit = 1
+
+        return try? viewContext.fetch(request).first
+    }
+
     private func addExpense(from draft: ExpenseEditorDraft) {
         let now = Date()
         let expenseAmount = decimalValue(from: draft.expenseAmountText)
@@ -733,6 +757,7 @@ struct ExpensesView: View {
         expense.lastModifiedBy = "System"
         expense.projectRef = activeProjects.first(where: { $0.name == draft.projectName })
         expense.categoryRef = activeCategories.first(where: { $0.name == draft.categoryName })
+        expense.workspaceRef = fetchWorkspaceForNewExpense()
 
         do {
             try viewContext.save()
@@ -765,6 +790,9 @@ struct ExpensesView: View {
         storedExpense.lastModifiedBy = "System"
         storedExpense.projectRef = activeProjects.first(where: { $0.name == draft.projectName })
         storedExpense.categoryRef = activeCategories.first(where: { $0.name == draft.categoryName })
+        if storedExpense.workspaceRef == nil {
+            storedExpense.workspaceRef = fetchWorkspaceForNewExpense()
+        }
 
         do {
             try viewContext.save()
