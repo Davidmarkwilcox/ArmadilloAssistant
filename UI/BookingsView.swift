@@ -146,6 +146,12 @@ struct BookingsView: View {
         }
     }
 
+    struct BookingCSVImportSummary {
+        let parsedRowCount: Int
+        let importedRowCount: Int
+        let skippedDuplicateCount: Int
+    }
+
     enum BookingBulkDeleteError: LocalizedError {
         case failedToDelete
 
@@ -497,7 +503,7 @@ struct BookingsView: View {
             let bookingDate: Date?
         }
 
-        static func importFile(from url: URL, context: NSManagedObjectContext) throws -> Int {
+        static func importFile(from url: URL, context: NSManagedObjectContext) throws -> BookingCSVImportSummary {
             let csvText: String
             print("[BookingCSVImport] Import entry")
             print("[BookingCSVImport] Selected file URL: \(url.path)")
@@ -533,7 +539,11 @@ struct BookingsView: View {
             if parsedRows.isEmpty {
                 print("[BookingCSVImport] Early return: no parsed booking rows")
                 print("[BookingCSVImport] Returned import count: 0")
-                return 0
+                return BookingCSVImportSummary(
+                    parsedRowCount: 0,
+                    importedRowCount: 0,
+                    skippedDuplicateCount: 0
+                )
             }
 
             let now = Date()
@@ -599,7 +609,11 @@ struct BookingsView: View {
             if importedCount == 0 {
                 print("[BookingCSVImport] Early return: all parsed rows were duplicates")
                 print("[BookingCSVImport] Returned import count: 0")
-                return 0
+                return BookingCSVImportSummary(
+                    parsedRowCount: parsedRows.count,
+                    importedRowCount: 0,
+                    skippedDuplicateCount: skippedDuplicateCount
+                )
             }
 
             do {
@@ -612,7 +626,12 @@ struct BookingsView: View {
             }
 
             print("[BookingCSVImport] Returned import count: \(importedCount)")
-            return importedCount
+            print("[BookingCSVImport] Summary: parsed=\(parsedRows.count), imported=\(importedCount), skippedDuplicates=\(skippedDuplicateCount)")
+            return BookingCSVImportSummary(
+                parsedRowCount: parsedRows.count,
+                importedRowCount: importedCount,
+                skippedDuplicateCount: skippedDuplicateCount
+            )
         }
 
         private static func fetchPropertyMap(context: NSManagedObjectContext) -> [String: RentalProperty] {
@@ -1109,9 +1128,17 @@ struct BookingsView: View {
     static func importBookingsCSV(from url: URL, context: NSManagedObjectContext) throws -> Int {
         print("[BookingCSVImport] Import entry")
         print("[BookingCSVImport] Selected file URL: \(url.path)")
-        let importedCount = try BookingCSVImporter.importFile(from: url, context: context)
+        let importedCount = try BookingCSVImporter.importFile(from: url, context: context).importedRowCount
         print("[BookingCSVImport] Returned import count: \(importedCount)")
         return importedCount
+    }
+
+    static func importBookingsCSVSummary(from url: URL, context: NSManagedObjectContext) throws -> BookingCSVImportSummary {
+        print("[BookingCSVImport] Import summary entry")
+        print("[BookingCSVImport] Selected file URL: \(url.path)")
+        let summary = try BookingCSVImporter.importFile(from: url, context: context)
+        print("[BookingCSVImport] Returned import summary: parsed=\(summary.parsedRowCount), imported=\(summary.importedRowCount), skippedDuplicates=\(summary.skippedDuplicateCount)")
+        return summary
     }
 
     static func deleteAllBookingData(context: NSManagedObjectContext) throws -> Int {

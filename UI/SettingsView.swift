@@ -159,6 +159,9 @@ private struct ExpenseSettingsView: View {
 
     @State private var newProjectName: String = ""
     @State private var newCategoryName: String = ""
+    @State private var projectNameDrafts: [NSManagedObjectID: String] = [:]
+    @State private var categoryNameDrafts: [NSManagedObjectID: String] = [:]
+    @State private var expenseSettingsValidationMessage: String = ""
 
     @FetchRequest(
         sortDescriptors: [
@@ -203,6 +206,30 @@ private struct ExpenseSettingsView: View {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func namesMatch(_ lhs: String, _ rhs: String) -> Bool {
+        normalizedName(lhs).caseInsensitiveCompare(normalizedName(rhs)) == .orderedSame
+    }
+
+    private func projectNameExists(_ name: String, excluding project: ExpenseProject? = nil) -> Bool {
+        projects.contains { existingProject in
+            if let project, existingProject.objectID == project.objectID {
+                return false
+            }
+
+            return namesMatch(existingProject.name ?? "", name)
+        }
+    }
+
+    private func categoryNameExists(_ name: String, excluding category: ExpenseCategory? = nil) -> Bool {
+        categories.contains { existingCategory in
+            if let category, existingCategory.objectID == category.objectID {
+                return false
+            }
+
+            return namesMatch(existingCategory.name ?? "", name)
+        }
+    }
+
     private func saveMileageRate() {
         let trimmed = mileageRateText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let parsed = Double(trimmed), parsed >= 0 else {
@@ -237,8 +264,8 @@ private struct ExpenseSettingsView: View {
     private func addProject() {
         let name = normalizedName(newProjectName)
         guard !name.isEmpty else { return }
-        guard !projects.contains(where: { ($0.name ?? "").caseInsensitiveCompare(name) == .orderedSame }) else {
-            newProjectName = ""
+        guard !projectNameExists(name) else {
+            expenseSettingsValidationMessage = "A project with this name already exists."
             return
         }
 
@@ -255,14 +282,15 @@ private struct ExpenseSettingsView: View {
         project.workspaceRef = fetchWorkspaceForExpenseSettings()
 
         newProjectName = ""
+        expenseSettingsValidationMessage = ""
         saveContextIfNeeded()
     }
 
     private func addCategory() {
         let name = normalizedName(newCategoryName)
         guard !name.isEmpty else { return }
-        guard !categories.contains(where: { ($0.name ?? "").caseInsensitiveCompare(name) == .orderedSame }) else {
-            newCategoryName = ""
+        guard !categoryNameExists(name) else {
+            expenseSettingsValidationMessage = "A category with this name already exists."
             return
         }
 
@@ -279,7 +307,44 @@ private struct ExpenseSettingsView: View {
         category.workspaceRef = fetchWorkspaceForExpenseSettings()
 
         newCategoryName = ""
+        expenseSettingsValidationMessage = ""
         saveContextIfNeeded()
+    }
+
+    private func commitProjectName(_ project: ExpenseProject) {
+        let draftName = normalizedName(projectNameDrafts[project.objectID] ?? project.name ?? "")
+        guard !draftName.isEmpty else {
+            expenseSettingsValidationMessage = "Project name cannot be blank."
+            return
+        }
+
+        guard !projectNameExists(draftName, excluding: project) else {
+            expenseSettingsValidationMessage = "A project with this name already exists."
+            return
+        }
+
+        project.name = draftName
+        projectNameDrafts[project.objectID] = draftName
+        expenseSettingsValidationMessage = ""
+        touchProject(project)
+    }
+
+    private func commitCategoryName(_ category: ExpenseCategory) {
+        let draftName = normalizedName(categoryNameDrafts[category.objectID] ?? category.name ?? "")
+        guard !draftName.isEmpty else {
+            expenseSettingsValidationMessage = "Category name cannot be blank."
+            return
+        }
+
+        guard !categoryNameExists(draftName, excluding: category) else {
+            expenseSettingsValidationMessage = "A category with this name already exists."
+            return
+        }
+
+        category.name = draftName
+        categoryNameDrafts[category.objectID] = draftName
+        expenseSettingsValidationMessage = ""
+        touchCategory(category)
     }
 
     private func touchProject(_ project: ExpenseProject) {
@@ -302,6 +367,7 @@ private struct ExpenseSettingsView: View {
 
     private func deleteProjects(at offsets: IndexSet) {
         for index in offsets {
+            projectNameDrafts.removeValue(forKey: projects[index].objectID)
             viewContext.delete(projects[index])
         }
         saveContextIfNeeded()
@@ -309,6 +375,7 @@ private struct ExpenseSettingsView: View {
 
     private func deleteCategories(at offsets: IndexSet) {
         for index in offsets {
+            categoryNameDrafts.removeValue(forKey: categories[index].objectID)
             viewContext.delete(categories[index])
         }
         saveContextIfNeeded()
@@ -316,6 +383,14 @@ private struct ExpenseSettingsView: View {
 
     var body: some View {
         List {
+            if !expenseSettingsValidationMessage.isEmpty {
+                Section {
+                    Text(expenseSettingsValidationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
             Section {
                 TextField("Mileage Rate", text: $mileageRateText)
                     .keyboardType(.decimalPad)
@@ -354,14 +429,13 @@ private struct ExpenseSettingsView: View {
                             TextField(
                                 "Project Name",
                                 text: Binding(
-                                    get: { project.name ?? "" },
-                                    set: { project.name = $0 }
+                                    get: { projectNameDrafts[project.objectID] ?? project.name ?? "" },
+                                    set: { projectNameDrafts[project.objectID] = $0 }
                                 )
                             )
                             .textInputAutocapitalization(.words)
                             .onSubmit {
-                                project.name = normalizedName(project.name ?? "")
-                                touchProject(project)
+                                commitProjectName(project)
                             }
 
                             Toggle(
@@ -406,14 +480,13 @@ private struct ExpenseSettingsView: View {
                             TextField(
                                 "Category Name",
                                 text: Binding(
-                                    get: { category.name ?? "" },
-                                    set: { category.name = $0 }
+                                    get: { categoryNameDrafts[category.objectID] ?? category.name ?? "" },
+                                    set: { categoryNameDrafts[category.objectID] = $0 }
                                 )
                             )
                             .textInputAutocapitalization(.words)
                             .onSubmit {
-                                category.name = normalizedName(category.name ?? "")
-                                touchCategory(category)
+                                commitCategoryName(category)
                             }
 
                             Toggle(
@@ -1771,6 +1844,7 @@ private struct DataManagementSettingsView: View {
 
     @State private var exportShareItem: ExportShareItem?
     @State private var exportErrorMessage: String = ""
+    @State private var exportSuccessMessage: String = ""
     @State private var isShowingExportErrorAlert: Bool = false
     @State private var activeImportTarget: ImportTarget?
     @State private var importErrorMessage: String = ""
@@ -1816,6 +1890,7 @@ private struct DataManagementSettingsView: View {
     private func exportExpensesCSV() {
         do {
             let fileURL = try ExpensesView.makeExpensesCSVExportFile(context: viewContext)
+            exportSuccessMessage = "Expenses CSV export is ready: \(fileURL.lastPathComponent)"
             exportShareItem = ExportShareItem(url: fileURL)
         } catch {
             exportErrorMessage = error.localizedDescription
@@ -1826,6 +1901,7 @@ private struct DataManagementSettingsView: View {
     private func exportBookingsCSV() {
         do {
             let fileURL = try BookingsView.makeBookingsCSVExportFile(context: viewContext)
+            exportSuccessMessage = "Reservations CSV export is ready: \(fileURL.lastPathComponent)"
             exportShareItem = ExportShareItem(url: fileURL)
         } catch {
             exportErrorMessage = error.localizedDescription
@@ -1859,6 +1935,7 @@ private struct DataManagementSettingsView: View {
                 startDate: hotelTaxReportStartDate,
                 endDate: hotelTaxReportEndDate
             )
+            exportSuccessMessage = "Hotel tax occupancy report is ready: \(fileURL.lastPathComponent)"
             exportShareItem = ExportShareItem(url: fileURL)
             isShowingHotelTaxReportDateSheet = false
         } catch {
@@ -1877,10 +1954,13 @@ private struct DataManagementSettingsView: View {
         }
 
         do {
-            let importedCount = try BookingsView.importBookingsCSV(from: url, context: viewContext)
-            importSuccessMessage = importedCount == 1
-                ? "Imported 1 booking record successfully."
-                : "Imported \(importedCount) booking records successfully."
+            let summary = try BookingsView.importBookingsCSVSummary(from: url, context: viewContext)
+            importSuccessMessage = """
+            Parsed \(summary.parsedRowCount) booking rows.
+            Imported \(summary.importedRowCount) new booking records.
+            Skipped \(summary.skippedDuplicateCount) duplicate rows.
+            """
+            print("[DataManagementSettingsView] Booking import summary: parsed=\(summary.parsedRowCount), imported=\(summary.importedRowCount), skippedDuplicates=\(summary.skippedDuplicateCount)")
             isShowingImportSuccessAlert = true
         } catch {
             importErrorMessage = error.localizedDescription
@@ -1954,6 +2034,12 @@ private struct DataManagementSettingsView: View {
                     prepareHotelTaxReportDateRange()
                 } label: {
                     Label("Hotel Tax Occupancy Report", systemImage: "doc.text.magnifyingglass")
+                }
+
+                if !exportSuccessMessage.isEmpty {
+                    Text(exportSuccessMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Export")
