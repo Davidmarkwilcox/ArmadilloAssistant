@@ -1,13 +1,17 @@
 import SwiftUI
 import CoreData
+import Combine
 
 // Custom tab-based root navigation (no NavigationStack) to avoid opaque container backgrounds.
 struct ContentView: View {
     @AppStorage("selected_root_tab") private var storedSelectedTabRawValue: String = Tab.expenses.rawValue
+    @Environment(\.managedObjectContext) private var viewContext
 
     @StateObject private var appLock = AppLockManager.shared
     @State private var isShowingGlobalSearch: Bool = false
     @State private var pendingGlobalSearchDestination: GlobalSearchDestination?
+    @State private var lastAppWideRefreshDate = Date.distantPast
+    @State private var appRefreshToken = UUID()
 
     enum Tab: String, CaseIterable, Identifiable {
         case expenses = "Expenses"
@@ -31,7 +35,6 @@ struct ContentView: View {
         case profile = "Profile"
         case property = "Property"
         case expenses = "Expenses"
-        case team = "Team"
         case dataManagement = "Data Management"
 
         var id: String { rawValue }
@@ -41,7 +44,6 @@ struct ContentView: View {
             case .profile: return "person.crop.circle"
             case .property: return "house"
             case .expenses: return "dollarsign.circle"
-            case .team: return "person.3"
             case .dataManagement: return "tray.2"
             }
         }
@@ -169,6 +171,27 @@ struct ContentView: View {
         isShowingGlobalSearch = false
     }
 
+    private func refreshAllAppData(force: Bool = false) {
+        let now = Date()
+        let minimumRefreshInterval: TimeInterval = force ? 0 : 5
+
+        guard force || now.timeIntervalSince(lastAppWideRefreshDate) >= minimumRefreshInterval else {
+            return
+        }
+
+        lastAppWideRefreshDate = now
+
+        PersistenceController.shared.reconcileLocalExpensesWithPublicCloudKit {
+            DispatchQueue.main.async {
+                self.viewContext.refreshAllObjects()
+                self.viewContext.processPendingChanges()
+                self.appRefreshToken = UUID()
+
+                print("[ContentView][Refresh] App-wide Core Data refresh completed token=\(self.appRefreshToken)")
+            }
+        }
+    }
+
     var body: some View {
         ZStack {
             TabView(selection: selectedTab) {
@@ -181,7 +204,8 @@ struct ContentView: View {
                         if case .expense = pendingGlobalSearchDestination {
                             pendingGlobalSearchDestination = nil
                         }
-                    }
+                    },
+                    appRefreshToken: appRefreshToken
                 )
                 .tag(Tab.expenses)
                 .tabItem {
@@ -197,7 +221,8 @@ struct ContentView: View {
                         if case .booking = pendingGlobalSearchDestination {
                             pendingGlobalSearchDestination = nil
                         }
-                    }
+                    },
+                    appRefreshToken: appRefreshToken
                 )
                 .tag(Tab.bookings)
                 .tabItem {
@@ -244,6 +269,24 @@ struct ContentView: View {
                     onSelectDestination: handleGlobalSearchSelection
                 )
             }
+            .onReceive(
+                NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+                    .receive(on: RunLoop.main)
+            ) { _ in
+                refreshAllAppData()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)
+                    .receive(on: RunLoop.main)
+            ) { _ in
+                refreshAllAppData()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .armadilloAssistantRefreshAllAppData)
+                    .receive(on: RunLoop.main)
+            ) { _ in
+                refreshAllAppData(force: true)
+            }
 
             if appLock.isLocked {
                 VStack(spacing: Theme.Spacing.l) {
@@ -255,10 +298,24 @@ struct ContentView: View {
                         .font(Theme.Typography.headline())
                         .foregroundStyle(Theme.Colors.textPrimary)
 
+                    if appLock.isAuthenticating {
+                        ProgressView()
+                            .tint(Theme.Colors.textPrimary)
+                    }
+
+                    if !appLock.authenticationErrorMessage.isEmpty {
+                        Text(appLock.authenticationErrorMessage)
+                            .font(Theme.Typography.caption())
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, Theme.Spacing.xl)
+                    }
+
                     Button("Unlock") {
                         appLock.authenticate()
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(appLock.isAuthenticating)
                     .onAppear {
                         appLock.authenticate()
                     }
@@ -555,4 +612,8 @@ private struct GlobalSearchView: View {
 
 #Preview {
     ContentView()
+}
+
+extension Notification.Name {
+    static let armadilloAssistantRefreshAllAppData = Notification.Name("ArmadilloAssistantRefreshAllAppData")
 }

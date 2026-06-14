@@ -8,6 +8,7 @@
 
 import SwiftUI
 import CoreData
+import UIKit
 
 // MARK: - 1) BookingsView
 
@@ -904,14 +905,18 @@ struct BookingsView: View {
     @State private var isShowingYearPicker: Bool = false
     @State private var isShowingStatusPicker: Bool = false
 
+    private let appRefreshToken: UUID?
+
     init(
         onSearchTapped: @escaping () -> Void = {},
         externalBookingSelectionID: UUID? = nil,
-        onHandledExternalBookingSelection: @escaping () -> Void = {}
+        onHandledExternalBookingSelection: @escaping () -> Void = {},
+        appRefreshToken: UUID? = nil
     ) {
         self.onSearchTapped = onSearchTapped
         self.externalBookingSelectionID = externalBookingSelectionID
         self.onHandledExternalBookingSelection = onHandledExternalBookingSelection
+        self.appRefreshToken = appRefreshToken
     }
 
     // MARK: - 1.5 Derived
@@ -1165,6 +1170,13 @@ struct BookingsView: View {
         }
     }
 
+    private func requestAppWideRefresh() {
+        NotificationCenter.default.post(
+            name: .armadilloAssistantRefreshAllAppData,
+            object: nil
+        )
+    }
+
     // MARK: - 1.6 Body
 
     var body: some View {
@@ -1328,7 +1340,11 @@ struct BookingsView: View {
                         }
                     }
                 }
+                .id(appRefreshToken)
                 .listStyle(.insetGrouped)
+                .refreshable {
+                    requestAppWideRefresh()
+                }
             }
             // Hide the system nav bar so only the branded header is shown.
             .toolbar(.hidden, for: .navigationBar)
@@ -1338,6 +1354,10 @@ struct BookingsView: View {
             }
             .onChange(of: externalBookingSelectionID) { _, _ in
                 handleExternalBookingSelectionIfNeeded()
+            }
+            .onChange(of: appRefreshToken) { _, _ in
+                viewContext.refreshAllObjects()
+                viewContext.processPendingChanges()
             }
             .sheet(isPresented: $isShowingYearPicker) {
                 NavigationStack {

@@ -23,6 +23,7 @@ struct ExpensesView: View {
     let onSearchTapped: () -> Void
     let externalExpenseSelectionID: UUID?
     let onHandledExternalExpenseSelection: () -> Void
+    let appRefreshToken: UUID?
 
     // MARK: - 1.1 Models
 
@@ -570,11 +571,13 @@ struct ExpensesView: View {
     init(
         onSearchTapped: @escaping () -> Void = {},
         externalExpenseSelectionID: UUID? = nil,
-        onHandledExternalExpenseSelection: @escaping () -> Void = {}
+        onHandledExternalExpenseSelection: @escaping () -> Void = {},
+        appRefreshToken: UUID? = nil
     ) {
         self.onSearchTapped = onSearchTapped
         self.externalExpenseSelectionID = externalExpenseSelectionID
         self.onHandledExternalExpenseSelection = onHandledExternalExpenseSelection
+        self.appRefreshToken = appRefreshToken
     }
 
     // MARK: - 1.3 Derived
@@ -661,9 +664,11 @@ struct ExpensesView: View {
         }
     }
 
-    private func refreshExpenseData() {
-        viewContext.refreshAllObjects()
-        viewContext.processPendingChanges()
+    private func requestAppWideRefresh() {
+        NotificationCenter.default.post(
+            name: .armadilloAssistantRefreshAllAppData,
+            object: nil
+        )
     }
 
     private func expenserValue(from rawValue: String?) -> Expenser {
@@ -896,6 +901,50 @@ struct ExpensesView: View {
         recentSearches = Array(savedSearches.prefix(5))
     }
 
+    private func storeDescription(for object: NSManagedObject) -> String {
+        guard let store = object.objectID.persistentStore else {
+            return "store=unassigned"
+        }
+
+        let configurationName = store.configurationName
+        let storeName = store.url?.lastPathComponent ?? "no-url"
+        return "store=\(storeName), configuration=\(configurationName)"
+    }
+
+    private func debugExpensePickerReferenceDataStores() {
+        let prefix = "[ExpensesView][CloudKitDiagnostic]"
+
+        print("\(prefix) storedExpenses.count=\(storedExpenses.count)")
+        print("\(prefix) filteredExpenses.count=\(filteredExpenses.count)")
+        for expense in storedExpenses {
+            let expenseID = expense.id?.uuidString ?? "nil"
+            let project = expense.project ?? ""
+            let category = expense.category ?? ""
+            let notes = expense.notes ?? ""
+            let workspaceName = expense.workspaceRef?.name ?? "nil"
+            let objectURI = expense.objectID.uriRepresentation().absoluteString
+            print("\(prefix) Expense id='\(expenseID)' project='\(project)' category='\(category)' amount=\(expense.reimbursementAmount) notes='\(notes)' workspaceRef='\(workspaceName)' objectID=\(objectURI) \(storeDescription(for: expense))")
+        }
+
+        print("\(prefix) storedProjects.count=\(storedProjects.count)")
+        print("\(prefix) activeProjects.count=\(activeProjects.count)")
+        for project in storedProjects {
+            let name = project.name ?? ""
+            let workspaceName = project.workspaceRef?.name ?? "nil"
+            let objectURI = project.objectID.uriRepresentation().absoluteString
+            print("\(prefix) Project name='\(name)' isActive=\(project.isActive) workspaceRef='\(workspaceName)' objectID=\(objectURI) \(storeDescription(for: project))")
+        }
+
+        print("\(prefix) storedCategories.count=\(storedCategories.count)")
+        print("\(prefix) activeCategories.count=\(activeCategories.count)")
+        for category in storedCategories {
+            let name = category.name ?? ""
+            let workspaceName = category.workspaceRef?.name ?? "nil"
+            let objectURI = category.objectID.uriRepresentation().absoluteString
+            print("\(prefix) Category name='\(name)' isActive=\(category.isActive) workspaceRef='\(workspaceName)' objectID=\(objectURI) \(storeDescription(for: category))")
+        }
+    }
+
     private func saveRecentSearches(_ searches: [String]) {
         let limitedSearches = Array(searches.prefix(5))
         recentSearches = limitedSearches
@@ -1100,18 +1149,25 @@ struct ExpensesView: View {
                         }
                     }
                 }
+                .id(appRefreshToken)
                 .listStyle(.insetGrouped)
                 .refreshable {
-                    refreshExpenseData()
+                    requestAppWideRefresh()
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 loadRecentSearches()
+                debugExpensePickerReferenceDataStores()
                 handleExternalExpenseSelectionIfNeeded()
             }
             .onChange(of: externalExpenseSelectionID) { _, _ in
                 handleExternalExpenseSelectionIfNeeded()
+            }
+            .onChange(of: appRefreshToken) { _, _ in
+                viewContext.refreshAllObjects()
+                viewContext.processPendingChanges()
+                debugExpensePickerReferenceDataStores()
             }
             .safeAreaInset(edge: .bottom) {
                 HStack {
@@ -1566,7 +1622,7 @@ private struct ExpenseDetailView: View {
             if canEdit || canDelete {
                 Section("Actions") {
                     if canEdit {
-                        Button {
+                        Button(role: .destructive) {
                             onEdit()
                         } label: {
                             Label("Edit Expense", systemImage: "pencil")

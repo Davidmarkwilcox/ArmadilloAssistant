@@ -9,6 +9,14 @@ import CoreData
 
 struct PersistenceController {
     static let shared = PersistenceController()
+    static let cloudKitContainerIdentifier = "iCloud.com.DavidMWilcox.ArmadilloAssistant"
+
+#if DEBUG
+    // Section 0A: Development-only Public CloudKit schema initializer
+    // Set this to true only while validating Public CloudKit schema/index creation in Development.
+    // Do not use this in production builds.
+    private static let shouldInitializePublicCloudKitSchema = true
+#endif
 
     @MainActor
     static let preview: PersistenceController = {
@@ -21,17 +29,142 @@ struct PersistenceController {
     let container: NSPersistentCloudKitContainer
 
     var cloudKitContainer: CKContainer {
-        CKContainer(identifier: "iCloud.com.DavidMWilcox.ArmadilloAssistant")
+        CKContainer(identifier: Self.cloudKitContainerIdentifier)
+    }
+
+    // Section 0B: CloudKit mirroring diagnostics
+    // Logs import/export lifecycle events from NSPersistentCloudKitContainer so we can distinguish
+    // between UI refresh issues and CloudKit mirroring delays or failures.
+    private func configureCloudKitEventLogging() {
+        NotificationCenter.default.addObserver(
+            forName: NSPersistentCloudKitContainer.eventChangedNotification,
+            object: container,
+            queue: .main
+        ) { notification in
+            guard let event = notification.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey]
+                    as? NSPersistentCloudKitContainer.Event else {
+                print("[Persistence][CloudKitEvent] Received event notification without event payload")
+                return
+            }
+
+            let typeDescription: String
+            switch event.type {
+            case .setup:
+                typeDescription = "setup"
+            case .import:
+                typeDescription = "import"
+            case .export:
+                typeDescription = "export"
+            @unknown default:
+                typeDescription = "unknown"
+            }
+
+            let successDescription = event.succeeded ? "succeeded" : "not-succeeded"
+            let errorDescription = event.error.map { " error=\($0)" } ?? ""
+
+            print("[Persistence][CloudKitEvent] type=\(typeDescription) status=\(successDescription) start=\(event.startDate) end=\(String(describing: event.endDate))\(errorDescription)")
+        }
+    }
+
+    // Section 0C: Public CloudKit reconciliation
+    // Public CloudKit mirroring may leave a stale local Expense if another owner deletes the public record.
+    // This method queries the Public Database for current CD_Expense CD_id values and removes local
+    // Expense records whose UUID no longer exists in CloudKit. It only deletes after a successful
+    // CloudKit query so temporary network/auth failures do not remove local data.
+    func reconcileLocalExpensesWithPublicCloudKit(completion: (() -> Void)? = nil) {
+        let database = cloudKitContainer.publicCloudDatabase
+        let query = CKQuery(recordType: "CD_Expense", predicate: NSPredicate(value: true))
+        let operation = CKQueryOperation(query: query)
+        operation.desiredKeys = ["CD_id"]
+        operation.resultsLimit = CKQueryOperation.maximumResults
+
+        var publicExpenseIDs = Set<String>()
+        var recordReadErrors: [Error] = []
+
+        operation.recordMatchedBlock = { _, result in
+            switch result {
+            case .success(let record):
+                if let uuid = record["CD_id"] as? UUID {
+                    publicExpenseIDs.insert(uuid.uuidString.uppercased())
+                } else if let stringValue = record["CD_id"] as? String,
+                          let uuid = UUID(uuidString: stringValue) {
+                    publicExpenseIDs.insert(uuid.uuidString.uppercased())
+                } else if let stringValue = record["CD_id"] as? String {
+                    publicExpenseIDs.insert(stringValue.uppercased())
+                }
+            case .failure(let error):
+                recordReadErrors.append(error)
+            }
+        }
+
+        operation.queryResultBlock = { result in
+            if !recordReadErrors.isEmpty {
+                print("[Persistence][PublicReconcile] Expense reconciliation skipped due to record read errors: \(recordReadErrors)")
+                DispatchQueue.main.async {
+                    completion?()
+                }
+                return
+            }
+
+            switch result {
+            case .success(let cursor):
+                if cursor != nil {
+                    print("[Persistence][PublicReconcile] Expense reconciliation skipped because query pagination is not yet handled")
+                    DispatchQueue.main.async {
+                        completion?()
+                    }
+                    return
+                }
+
+                let context = container.viewContext
+                context.perform {
+                    let request: NSFetchRequest<Expense> = Expense.fetchRequest()
+                    request.sortDescriptors = [
+                        NSSortDescriptor(key: "createdAt", ascending: true)
+                    ]
+
+                    do {
+                        let localExpenses = try context.fetch(request)
+                        var removedCount = 0
+
+                        for expense in localExpenses {
+                            guard let localID = expense.id?.uuidString.uppercased() else { continue }
+                            guard !publicExpenseIDs.contains(localID) else { continue }
+
+                            context.delete(expense)
+                            removedCount += 1
+                        }
+
+                        if removedCount > 0, context.hasChanges {
+                            try context.save()
+                        }
+
+                        print("[Persistence][PublicReconcile] Public CD_Expense count=\(publicExpenseIDs.count) local stale expenses removed=\(removedCount)")
+                    } catch {
+                        print("[Persistence][PublicReconcile] Expense reconciliation failed: \(error)")
+                    }
+
+                    DispatchQueue.main.async {
+                        completion?()
+                    }
+                }
+            case .failure(let error):
+                print("[Persistence][PublicReconcile] Expense reconciliation skipped due to CloudKit query error: \(error)")
+                DispatchQueue.main.async {
+                    completion?()
+                }
+            }
+        }
+
+        database.add(operation)
     }
 
     init(inMemory: Bool = false) {
         container = NSPersistentCloudKitContainer(name: "ArmadilloAssistant")
         // Section 1: CloudKit store configuration
-        // The app uses two persistent stores so Core Data can participate in both
-        // the owner's private CloudKit database and accepted CloudKit shared database records.
-        // Private store: objects created by the owner, including RentalProperty root share objects.
-        // Shared store: objects accepted through CloudKit sharing invitations.
-        let cloudKitContainerIdentifier = "iCloud.com.DavidMWilcox.ArmadilloAssistant"
+        // The app uses a single public CloudKit-backed persistent store.
+
+        let persistentContainer = container
 
         if inMemory {
             let previewStoreDescription = container.persistentStoreDescriptions.first
@@ -42,94 +175,44 @@ struct PersistenceController {
             previewStoreDescription?.setOption(true as NSNumber,
                                                forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
         } else {
-            let privateStoreDescription = container.persistentStoreDescriptions.first ?? NSPersistentStoreDescription()
+            let publicStoreDescription = container.persistentStoreDescriptions.first ?? NSPersistentStoreDescription()
 
-            if privateStoreDescription.url == nil {
-                let defaultDirectory = NSPersistentContainer.defaultDirectoryURL()
-                privateStoreDescription.url = defaultDirectory.appendingPathComponent("ArmadilloAssistant.sqlite")
-            }
+            let defaultDirectory = NSPersistentContainer.defaultDirectoryURL()
+            publicStoreDescription.url = defaultDirectory.appendingPathComponent("ArmadilloAssistant-Public.sqlite")
 
-            // TEMPORARY CLOUDKIT ROLLBACK STATE
-            // - Private mirroring remains disabled.
-            // - Shared store loading remains disabled.
-            // - The app is intentionally running in local-only stabilization mode.
-            // Rebuild and verify the CloudKit baseline before re-enabling either store path.
-            let privateOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: cloudKitContainerIdentifier)
-            privateOptions.databaseScope = .private
-            // Temporary rollback: disable private CloudKit mirroring while
-            // rebuilding the CloudKit baseline from a clean state.
-            // Local Core Data persistence remains fully functional.
-            privateStoreDescription.cloudKitContainerOptions = nil
-            privateStoreDescription.setOption(true as NSNumber,
+            let publicOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: Self.cloudKitContainerIdentifier)
+            publicOptions.databaseScope = .public
+            publicStoreDescription.cloudKitContainerOptions = publicOptions
+            publicStoreDescription.setOption(true as NSNumber,
                                               forKey: NSPersistentHistoryTrackingKey)
-            privateStoreDescription.setOption(true as NSNumber,
+            publicStoreDescription.setOption(true as NSNumber,
                                               forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
 
-            let sharedStoreDescription = privateStoreDescription.copy() as! NSPersistentStoreDescription
-            let sharedOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: cloudKitContainerIdentifier)
-            sharedOptions.databaseScope = .shared
-            sharedStoreDescription.cloudKitContainerOptions = sharedOptions
-            sharedStoreDescription.url = privateStoreDescription.url?.deletingLastPathComponent()
-                .appendingPathComponent("ArmadilloAssistant-Shared.sqlite")
-            sharedStoreDescription.setOption(true as NSNumber,
-                                             forKey: NSPersistentHistoryTrackingKey)
-            sharedStoreDescription.setOption(true as NSNumber,
-                                             forKey: NSPersistentStoreRemoteChangeNotificationPostOptionKey)
-
-            // Temporary rollback: load only the private store while stale deleted-share-zone
-            // metadata is being cleared from CloudKit. The shared store configuration above
-            // remains available for reactivation after the private baseline is stable.
-            container.persistentStoreDescriptions = [privateStoreDescription]
-            // temporarilyResetEmptySharedStoreIfNeeded(sharedStoreURL: sharedStoreDescription.url)
+            container.persistentStoreDescriptions = [publicStoreDescription]
         }
         container.loadPersistentStores(completionHandler: { (storeDescription, error) in
             if let error = error as NSError? {
                 fatalError("Unresolved error \(error), \(error.userInfo)")
             }
+
+            print("[Persistence] Loaded persistent store: \(storeDescription.url?.lastPathComponent ?? "unknown")")
+            print("[Persistence] CloudKit database scope: public")
+
+            #if DEBUG
+            if !inMemory && Self.shouldInitializePublicCloudKitSchema {
+                do {
+                    try persistentContainer.initializeCloudKitSchema(options: [])
+                    print("[Persistence] Public CloudKit schema initialization completed")
+                } catch {
+                    print("[Persistence] Public CloudKit schema initialization failed: \(error)")
+                }
+            }
+            #endif
         })
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        configureCloudKitEventLogging()
         seedReferenceDataIfNeeded(context: container.viewContext)
-    }
-
-    // Section 2: Temporary shared-store metadata cleanup
-    // Removes only the shared CloudKit store files when that store contains stale deleted-share-zone metadata.
-    // This does not touch ArmadilloAssistant.sqlite, which contains the user's private/local app data.
-    // Remove this helper and its startup call after the shared store has been rebuilt cleanly.
-    private func temporarilyResetEmptySharedStoreIfNeeded(sharedStoreURL: URL?) {
-        guard let sharedStoreURL else {
-            print("[Persistence] Shared-store reset skipped: missing shared store URL")
-            return
-        }
-
-        let resetFlagKey = "TemporarySharedStoreResetCompleted-20260524"
-        guard UserDefaults.standard.bool(forKey: resetFlagKey) == false else {
-            print("[Persistence] Shared-store reset skipped: already completed")
-            return
-        }
-
-        let fileManager = FileManager.default
-        let sharedStorePath = sharedStoreURL.path
-        let relatedPaths = [
-            sharedStorePath,
-            sharedStorePath + "-wal",
-            sharedStorePath + "-shm"
-        ]
-
-        for path in relatedPaths {
-            guard fileManager.fileExists(atPath: path) else { continue }
-
-            do {
-                try fileManager.removeItem(atPath: path)
-                print("[Persistence] Removed stale shared-store file: \(URL(fileURLWithPath: path).lastPathComponent)")
-            } catch {
-                let nsError = error as NSError
-                print("[Persistence] Failed removing shared-store file \(path): \(nsError), \(nsError.userInfo)")
-            }
-        }
-
-        UserDefaults.standard.set(true, forKey: resetFlagKey)
-        print("[Persistence] Temporary shared-store reset completed")
     }
 
     func fetchOrCreateWorkspace(context: NSManagedObjectContext) throws -> AppWorkspace {
@@ -158,52 +241,14 @@ struct PersistenceController {
         return workspace
     }
 
-    func createShare(for workspace: AppWorkspace,
-                     completion: @escaping (Result<(share: CKShare, container: CKContainer), Error>) -> Void) {
-        let workspaceName = workspace.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let shareTitle = workspaceName.isEmpty ? "12 Armadillos Workspace" : workspaceName
-
-        container.share([workspace], to: nil) { _, share, cloudKitContainer, error in
-            if let error {
-                DispatchQueue.main.async {
-                    completion(.failure(error))
-                }
-                return
-            }
-
-            guard let share,
-                  let cloudKitContainer else {
-                let missingShareError = NSError(
-                    domain: "ArmadilloAssistant.CloudKitSharing",
-                    code: 1001,
-                    userInfo: [NSLocalizedDescriptionKey: "CloudKit did not return a share for the workspace."]
-                )
-                DispatchQueue.main.async {
-                    completion(.failure(missingShareError))
-                }
-                return
-            }
-
-            share[CKShare.SystemFieldKey.title] = shareTitle as CKRecordValue
-            share.publicPermission = .none
-
-            DispatchQueue.main.async {
-                completion(.success((share: share, container: cloudKitContainer)))
-            }
-        }
-    }
-
-
     private func seedReferenceDataIfNeeded(context: NSManagedObjectContext) {
         seedRentalPropertiesIfNeeded(context: context)
         cleanupDuplicateRentalPropertiesIfNeeded(context: context)
         seedWorkspaceIfNeeded(context: context)
         cleanupDuplicateWorkspacesIfNeeded(context: context)
-        // Temporary containment: pause AppWorkspace -> RentalProperty attachment while
-        // CloudKit has stale share-zone metadata from an earlier share attempt.
-        // Re-enable this after the CloudKit metadata is cleaned.
         // attachRentalPropertiesToWorkspaceIfNeeded(context: context)
         backfillBookingPropertyRefsIfNeeded(context: context)
+        cleanupDuplicateExpenseReferenceDataIfNeeded(context: context)
         attachExpenseGraphToWorkspaceIfNeeded(context: context)
 
         let projectFetchRequest: NSFetchRequest<ExpenseProject> = ExpenseProject.fetchRequest()
@@ -368,7 +413,7 @@ struct PersistenceController {
     }
 
     // Section 3B: Workspace duplicate cleanup
-    // Keeps the oldest AppWorkspace as the canonical private workspace and removes duplicate
+    // Keeps the oldest AppWorkspace as the canonical public workspace and removes duplicate
     // private AppWorkspace records created during early sharing experiments.
     private func cleanupDuplicateWorkspacesIfNeeded(context: NSManagedObjectContext) {
         let request = NSFetchRequest<NSManagedObject>(entityName: "AppWorkspace")
@@ -429,9 +474,160 @@ struct PersistenceController {
         }
     }
 
+    // Section 3D: Expense reference duplicate cleanup
+    // Public CloudKit can briefly import local seed records and public records before merges settle.
+    // These helpers keep one canonical active ExpenseProject and ExpenseCategory per normalized name,
+    // reassign dependent Expense records, attach the canonical record to the canonical workspace,
+    // and remove duplicate reference records before the graph is exported again.
+    private func cleanupDuplicateExpenseReferenceDataIfNeeded(context: NSManagedObjectContext) {
+        cleanupDuplicateExpenseProjectsIfNeeded(context: context)
+        cleanupDuplicateExpenseCategoriesIfNeeded(context: context)
+    }
+
+    private func cleanupDuplicateExpenseProjectsIfNeeded(context: NSManagedObjectContext) {
+        let request: NSFetchRequest<ExpenseProject> = ExpenseProject.fetchRequest()
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "sortOrder", ascending: true),
+            NSSortDescriptor(key: "createdAt", ascending: true),
+            NSSortDescriptor(key: "name", ascending: true)
+        ]
+
+        do {
+            let projects = try context.fetch(request)
+            guard projects.count > 1 else { return }
+
+            let workspace = try fetchCanonicalWorkspace(context: context)
+            var canonicalByName: [String: ExpenseProject] = [:]
+            var removedCount = 0
+
+            for project in projects {
+                let key = normalizedLookupKey(project.name)
+                guard !key.isEmpty else { continue }
+
+                if let canonical = canonicalByName[key] {
+                    reassignExpenses(from: project, to: canonical, context: context)
+
+                    if canonical.value(forKey: "workspaceRef") == nil, let workspace {
+                        canonical.setValue(workspace, forKey: "workspaceRef")
+                    }
+
+                    if project.isActive {
+                        canonical.isActive = true
+                    }
+
+                    context.delete(project)
+                    removedCount += 1
+                } else {
+                    if project.value(forKey: "workspaceRef") == nil, let workspace {
+                        project.setValue(workspace, forKey: "workspaceRef")
+                    }
+                    canonicalByName[key] = project
+                }
+            }
+
+            if removedCount > 0, context.hasChanges {
+                try context.save()
+                print("[Persistence] Duplicate ExpenseProject cleanup removed: \(removedCount)")
+            }
+        } catch {
+            let nsError = error as NSError
+            fatalError("Failed to clean up duplicate ExpenseProject records: \(nsError), \(nsError.userInfo)")
+        }
+    }
+
+    private func cleanupDuplicateExpenseCategoriesIfNeeded(context: NSManagedObjectContext) {
+        let request: NSFetchRequest<ExpenseCategory> = ExpenseCategory.fetchRequest()
+        request.sortDescriptors = [
+            NSSortDescriptor(key: "sortOrder", ascending: true),
+            NSSortDescriptor(key: "createdAt", ascending: true),
+            NSSortDescriptor(key: "name", ascending: true)
+        ]
+
+        do {
+            let categories = try context.fetch(request)
+            guard categories.count > 1 else { return }
+
+            let workspace = try fetchCanonicalWorkspace(context: context)
+            var canonicalByName: [String: ExpenseCategory] = [:]
+            var removedCount = 0
+
+            for category in categories {
+                let key = normalizedLookupKey(category.name)
+                guard !key.isEmpty else { continue }
+
+                if let canonical = canonicalByName[key] {
+                    reassignExpenses(from: category, to: canonical, context: context)
+
+                    if canonical.value(forKey: "workspaceRef") == nil, let workspace {
+                        canonical.setValue(workspace, forKey: "workspaceRef")
+                    }
+
+                    if category.isActive {
+                        canonical.isActive = true
+                    }
+
+                    context.delete(category)
+                    removedCount += 1
+                } else {
+                    if category.value(forKey: "workspaceRef") == nil, let workspace {
+                        category.setValue(workspace, forKey: "workspaceRef")
+                    }
+                    canonicalByName[key] = category
+                }
+            }
+
+            if removedCount > 0, context.hasChanges {
+                try context.save()
+                print("[Persistence] Duplicate ExpenseCategory cleanup removed: \(removedCount)")
+            }
+        } catch {
+            let nsError = error as NSError
+            fatalError("Failed to clean up duplicate ExpenseCategory records: \(nsError), \(nsError.userInfo)")
+        }
+    }
+
+    private func reassignExpenses(from duplicateProject: ExpenseProject,
+                                  to canonicalProject: ExpenseProject,
+                                  context: NSManagedObjectContext) {
+        let request: NSFetchRequest<Expense> = Expense.fetchRequest()
+        request.predicate = NSPredicate(format: "projectRef == %@", duplicateProject)
+
+        do {
+            let expenses = try context.fetch(request)
+            for expense in expenses {
+                expense.projectRef = canonicalProject
+                if normalizedLookupKey(expense.project).isEmpty {
+                    expense.project = canonicalProject.name ?? ""
+                }
+            }
+        } catch {
+            print("[Persistence] Expense project reassignment failed: \(error)")
+        }
+    }
+
+    private func reassignExpenses(from duplicateCategory: ExpenseCategory,
+                                  to canonicalCategory: ExpenseCategory,
+                                  context: NSManagedObjectContext) {
+        let request: NSFetchRequest<Expense> = Expense.fetchRequest()
+        request.predicate = NSPredicate(format: "categoryRef == %@", duplicateCategory)
+
+        do {
+            let expenses = try context.fetch(request)
+            for expense in expenses {
+                expense.categoryRef = canonicalCategory
+                if normalizedLookupKey(expense.category).isEmpty {
+                    expense.category = canonicalCategory.name ?? ""
+                }
+            }
+        } catch {
+            print("[Persistence] Expense category reassignment failed: \(error)")
+        }
+    }
+
     // Section 4: Expense workspace attachment
-    // Attaches low-risk expense-related objects to the AppWorkspace share graph.
+    // Attaches low-risk expense-related objects to the AppWorkspace public workspace graph.
     // This intentionally does not attach RentalProperty or Booking records yet.
+    // Public CloudKit conversion keeps this staged behavior unchanged.
     private func attachExpenseGraphToWorkspaceIfNeeded(context: NSManagedObjectContext) {
         do {
             guard let workspace = try fetchCanonicalWorkspace(context: context) else {
@@ -547,20 +743,6 @@ struct PersistenceController {
         ]
 
         let workspaces = try context.fetch(workspaceFetchRequest)
-
-        for workspace in workspaces {
-            do {
-                let shares = try container.fetchShares(matching: [workspace.objectID])
-
-                if shares[workspace.objectID] != nil {
-                    print("[Persistence] Canonical workspace selected from active CKShare")
-                    return workspace
-                }
-            } catch {
-                let nsError = error as NSError
-                print("[Persistence] Workspace share lookup failed during canonical selection: \(nsError), \(nsError.userInfo)")
-            }
-        }
 
         if workspaces.first != nil {
             print("[Persistence] Canonical workspace selected from oldest fallback workspace")
