@@ -36,6 +36,7 @@ struct ContentView: View {
         case property = "Property"
         case expenses = "Expenses"
         case dataManagement = "Data Management"
+        case debug = "Debug"
 
         var id: String { rawValue }
 
@@ -45,6 +46,7 @@ struct ContentView: View {
             case .property: return "house"
             case .expenses: return "dollarsign.circle"
             case .dataManagement: return "tray.2"
+            case .debug: return "ladybug"
             }
         }
     }
@@ -181,13 +183,17 @@ struct ContentView: View {
 
         lastAppWideRefreshDate = now
 
-        PersistenceController.shared.reconcileLocalExpensesWithPublicCloudKit {
+        PersistenceController.shared.reconcilePendingPublicCloudKitChanges {
             DispatchQueue.main.async {
                 self.viewContext.refreshAllObjects()
                 self.viewContext.processPendingChanges()
                 self.appRefreshToken = UUID()
 
-                print("[ContentView][Refresh] App-wide Core Data refresh completed token=\(self.appRefreshToken)")
+                Debug.log(
+                    "App-wide Core Data refresh completed token=\(self.appRefreshToken)",
+                    channel: .uiRefresh,
+                    source: "ContentView"
+                )
             }
         }
     }

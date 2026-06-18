@@ -28,6 +28,7 @@ struct SettingsView: View {
         case property
         case expenses
         case dataManagement
+        case debug
     }
 
     // MARK: - 1) Debug (default Off)
@@ -70,6 +71,8 @@ struct SettingsView: View {
             return .expenses
         case .dataManagement:
             return .dataManagement
+        case .debug:
+            return .debug
         }
     }
 
@@ -108,6 +111,14 @@ struct SettingsView: View {
                     } footer: {
                         Text("Prototype navigation only. Content is placeholder and will expand over time.")
                     }
+
+                    Section {
+                        NavigationLink(value: Destination.debug) {
+                            Label("Debug", systemImage: "ladybug")
+                        }
+                    } footer: {
+                        Text("Session-only diagnostic logging for app-routed debug messages.")
+                    }
                 }
                 .listStyle(.insetGrouped)
             }
@@ -131,8 +142,147 @@ struct SettingsView: View {
                     ExpenseSettingsView()
                 case .dataManagement:
                     DataManagementSettingsView()
+                case .debug:
+                    DebugSettingsView()
                 }
             }
+        }
+    }
+}
+
+private struct DebugSettingsView: View {
+    @ObservedObject private var debugManager = DebugManager.shared
+    @State private var debugShareItem: DebugShareItem?
+
+    private struct DebugShareItem: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
+
+    private var channelSummaryText: String {
+        debugManager.activeChannelSummary
+    }
+
+    private var logText: String {
+        debugManager.formattedLogText()
+    }
+
+    private func binding(for channel: DebugChannel) -> Binding<Bool> {
+        Binding(
+            get: { debugManager.isChannelEnabled(channel) },
+            set: { debugManager.setChannel(channel, enabled: $0) }
+        )
+    }
+
+    private func copyLog() {
+        UIPasteboard.general.string = logText
+    }
+
+    private func shareLog() {
+        do {
+            let url = try debugManager.makeTemporaryLogFile()
+            debugShareItem = DebugShareItem(url: url)
+        } catch {
+            print("[DebugSettingsView] Failed to create debug log file: \(error.localizedDescription)")
+        }
+    }
+
+
+    var body: some View {
+        List {
+            Section {
+                Toggle("Debug", isOn: $debugManager.isEnabled)
+
+                Toggle("Quiet Mode", isOn: $debugManager.isQuietModeEnabled)
+                    .disabled(!debugManager.isEnabled)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Active Channels")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text(channelSummaryText)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                .padding(.vertical, 4)
+            } footer: {
+                Text("Debug messages are captured only when Debug is on and the message channel is enabled. Quiet Mode hides routine no-change sync messages while preserving errors, pending changes, and meaningful reconciliation activity.")
+            }
+
+            Section {
+                Group {
+                    if debugManager.hasMessages {
+                        ScrollView {
+                            Text(logText)
+                                .font(.caption.monospaced())
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .padding(10)
+                        }
+                    } else {
+                        Text("No debug messages this session.")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                    }
+                }
+                .frame(minHeight: 220, alignment: .topLeading)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } header: {
+                Text("Session Log")
+            } footer: {
+                Text("The log starts empty on each fresh app launch and is not saved between sessions.")
+            }
+
+            Section {
+                Button {
+                    copyLog()
+                } label: {
+                    Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                }
+                .disabled(!debugManager.hasMessages)
+
+                Button {
+                    shareLog()
+                } label: {
+                    Label("Share Log", systemImage: "square.and.arrow.up")
+                }
+                .disabled(!debugManager.hasMessages)
+
+                Button(role: .destructive) {
+                    debugManager.clear()
+                } label: {
+                    Label("Clear Log", systemImage: "trash")
+                }
+                .disabled(!debugManager.hasMessages)
+            }
+
+            Section {
+                Button {
+                    debugManager.enableAllChannels()
+                } label: {
+                    Label("Enable All Channels", systemImage: "checkmark.circle")
+                }
+
+                Button {
+                    debugManager.disableAllChannels()
+                } label: {
+                    Label("Disable All Channels", systemImage: "xmark.circle")
+                }
+
+                ForEach(DebugChannel.allCases) { channel in
+                    Toggle(channel.displayName, isOn: binding(for: channel))
+                }
+            } header: {
+                Text("Channels")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Debug")
+        .sheet(item: $debugShareItem) { item in
+            ActivityViewSheet(activityItems: [item.url])
         }
     }
 }
@@ -1942,111 +2092,19 @@ private struct DataManagementSettingsView: View {
     }
 }
 
+
 private struct ActivityViewSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
-    private let debugEnabled: Bool = false
 
-    private func debugLog(_ message: String) {
-        guard debugEnabled else { return }
-        print("[ActivityViewSheet] \(message)")
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: nil
+        )
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(debugEnabled: debugEnabled)
-    }
-
-    func makeUIViewController(context: Context) -> HostViewController {
-        debugLog("makeUIViewController called")
-        let controller = HostViewController()
-        controller.debugEnabled = debugEnabled
-        controller.coordinator = context.coordinator
-        controller.activityItems = activityItems
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: HostViewController, context: Context) {
-        debugLog("updateUIViewController called")
-        uiViewController.debugEnabled = debugEnabled
-        uiViewController.coordinator = context.coordinator
-        uiViewController.activityItems = activityItems
-    }
-
-    final class Coordinator: NSObject, UIAdaptivePresentationControllerDelegate {
-        private let debugEnabled: Bool
-
-        init(debugEnabled: Bool) {
-            self.debugEnabled = debugEnabled
-        }
-
-        func debugLog(_ message: String) {
-            guard debugEnabled else { return }
-            print("[ActivityViewSheet] \(message)")
-        }
-
-        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-            debugLog("Activity controller dismissed")
-        }
-    }
-
-    final class HostViewController: UIViewController {
-        var debugEnabled: Bool = false
-        weak var coordinator: Coordinator?
-        var activityItems: [Any] = []
-        private var hasPresentedActivityController = false
-
-        private func debugLog(_ message: String) {
-            guard debugEnabled else { return }
-            print("[ActivityViewSheet] \(message)")
-        }
-
-        override func viewDidLoad() {
-            super.viewDidLoad()
-            view.backgroundColor = .systemBackground
-            debugLog("Host view did load")
-        }
-
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            debugLog("Host view did appear")
-            presentActivityControllerIfNeeded()
-        }
-
-        private func presentActivityControllerIfNeeded() {
-            guard !hasPresentedActivityController else {
-                debugLog("Host view already presented activity controller")
-                return
-            }
-            guard presentedViewController == nil else {
-                debugLog("Host view already has a presented view controller")
-                return
-            }
-            guard !activityItems.isEmpty else {
-                debugLog("Host view has no activity items to present")
-                return
-            }
-
-            hasPresentedActivityController = true
-
-            let activityController = UIActivityViewController(
-                activityItems: activityItems,
-                applicationActivities: nil
-            )
-            activityController.presentationController?.delegate = coordinator
-
-            if let popover = activityController.popoverPresentationController {
-                popover.sourceView = view
-                popover.sourceRect = CGRect(
-                    x: view.bounds.midX,
-                    y: view.bounds.midY,
-                    width: 1,
-                    height: 1
-                )
-                popover.permittedArrowDirections = []
-            }
-
-            debugLog("About to present UIActivityViewController")
-            present(activityController, animated: true)
-        }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // No live update needed. Each export uses a fresh sheet item.
     }
 }
 

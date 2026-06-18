@@ -6,6 +6,7 @@
 
 import CloudKit
 import CoreData
+import Foundation
 
 struct PersistenceController {
     static let shared = PersistenceController()
@@ -32,6 +33,262 @@ struct PersistenceController {
         CKContainer(identifier: Self.cloudKitContainerIdentifier)
     }
 
+    enum PendingCloudKitOperation: String, Codable, Hashable {
+        case add
+        case update
+        case delete
+    }
+
+    enum PendingCloudKitSyncStatus: String, Codable, Hashable {
+        case pending
+        case applied
+        case failed
+    }
+
+    struct PendingCloudKitChange: Codable, Identifiable {
+        let id: UUID
+        let entityName: String
+        let entityID: UUID
+        let operation: PendingCloudKitOperation
+        let timestamp: Date
+        var syncStatus: PendingCloudKitSyncStatus
+        var errorMessage: String?
+        var payloadSnapshot: Data?
+    }
+
+    private struct PublicCloudKitRecordState {
+        let ids: Set<UUID>
+        let lastModifiedAtByID: [UUID: Date]
+        let recordsByID: [UUID: CKRecord]
+    }
+
+    private final class PendingCloudKitChangeLedger {
+        private let queue = DispatchQueue(label: "ArmadilloAssistant.PendingCloudKitChangeLedger")
+        private let fileManager: FileManager
+        private let fileURL: URL
+
+        init(fileManager: FileManager = .default) {
+            self.fileManager = fileManager
+            let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? fileManager.temporaryDirectory
+            let directoryURL = applicationSupportURL.appendingPathComponent("ArmadilloAssistant", isDirectory: true)
+            self.fileURL = directoryURL.appendingPathComponent("PendingPublicCloudKitChanges.json")
+        }
+
+        @discardableResult
+        func record(entityName: String,
+                    entityID: UUID,
+                    operation: PendingCloudKitOperation,
+                    timestamp: Date = Date(),
+                    payloadSnapshot: Data? = nil) -> UUID {
+            queue.sync {
+                var changes = loadChanges()
+
+                if operation == .update,
+                   changes.contains(where: {
+                       $0.entityName == entityName
+                           && $0.entityID == entityID
+                           && $0.operation == .add
+                           && $0.syncStatus == .pending
+                   }) {
+                    saveChanges(changes)
+                    return changes.first {
+                        $0.entityName == entityName
+                            && $0.entityID == entityID
+                            && $0.operation == .add
+                            && $0.syncStatus == .pending
+                    }?.id ?? UUID()
+                }
+
+                if operation == .add,
+                   let existingAdd = changes.first(where: {
+                       $0.entityName == entityName
+                           && $0.entityID == entityID
+                           && $0.operation == .add
+                           && $0.syncStatus == .pending
+                   }) {
+                    saveChanges(changes)
+                    return existingAdd.id
+                }
+
+                let change = PendingCloudKitChange(
+                    id: UUID(),
+                    entityName: entityName,
+                    entityID: entityID,
+                    operation: operation,
+                    timestamp: timestamp,
+                    syncStatus: .pending,
+                    errorMessage: nil,
+                    payloadSnapshot: payloadSnapshot
+                )
+                changes.append(change)
+                saveChanges(changes)
+                Debug.log(
+                    "Recorded pending \(operation.rawValue) entity=\(entityName) entityID=\(entityID) changeID=\(change.id)",
+                    channel: .pendingLedger,
+                    source: "Persistence"
+                )
+                return change.id
+            }
+        }
+
+        func markApplied(id: UUID) {
+            Debug.log(
+                "Marked pending change applied changeID=\(id)",
+                channel: .pendingLedger,
+                source: "Persistence"
+            )
+            updateChange(id: id, status: .applied, errorMessage: nil)
+        }
+
+        func markFailed(id: UUID, errorMessage: String) {
+            Debug.log(
+                "Marked pending change failed changeID=\(id) error=\(errorMessage)",
+                channel: .pendingLedger,
+                source: "Persistence"
+            )
+            updateChange(id: id, status: .failed, errorMessage: errorMessage)
+        }
+
+        func unresolvedChanges(entityName: String? = nil) -> [PendingCloudKitChange] {
+            queue.sync {
+                loadChanges().filter { change in
+                    change.syncStatus == .pending && (entityName == nil || change.entityName == entityName)
+                }
+            }
+        }
+
+        func hasUnresolvedChange(entityName: String, entityID: UUID) -> Bool {
+            queue.sync {
+                loadChanges().contains {
+                    $0.entityName == entityName
+                        && $0.entityID == entityID
+                        && $0.syncStatus == .pending
+                }
+            }
+        }
+
+        func markApplied(entityName: String, entityID: UUID, operations: Set<PendingCloudKitOperation>) {
+            queue.sync {
+                var changes = loadChanges()
+                var appliedOperations: [String] = []
+                for index in changes.indices {
+                    guard changes[index].entityName == entityName,
+                          changes[index].entityID == entityID,
+                          operations.contains(changes[index].operation),
+                          changes[index].syncStatus == .pending else {
+                        continue
+                    }
+
+                    changes[index].syncStatus = .applied
+                    changes[index].errorMessage = nil
+                    appliedOperations.append(changes[index].operation.rawValue)
+                }
+                saveChanges(changes)
+
+                if !appliedOperations.isEmpty {
+                    Debug.log(
+                        "Marked pending changes applied entity=\(entityName) entityID=\(entityID) operations=\(appliedOperations.sorted().joined(separator: ","))",
+                        channel: .pendingLedger,
+                        source: "Persistence"
+                    )
+                }
+            }
+        }
+
+        private func updateChange(id: UUID, status: PendingCloudKitSyncStatus, errorMessage: String?) {
+            queue.sync {
+                var changes = loadChanges()
+                guard let index = changes.firstIndex(where: { $0.id == id }) else { return }
+                changes[index].syncStatus = status
+                changes[index].errorMessage = errorMessage
+                saveChanges(changes)
+            }
+        }
+
+        private func loadChanges() -> [PendingCloudKitChange] {
+            guard fileManager.fileExists(atPath: fileURL.path) else { return [] }
+
+            do {
+                let data = try Data(contentsOf: fileURL)
+                return try JSONDecoder().decode([PendingCloudKitChange].self, from: data)
+            } catch {
+                preserveCorruptLedger()
+                Debug.log(
+                    "Failed to read pending-change ledger error=\(error)",
+                    channel: .pendingLedger,
+                    source: "Persistence"
+                )
+                return []
+            }
+        }
+
+        private func saveChanges(_ changes: [PendingCloudKitChange]) {
+            do {
+                try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(changes)
+                try data.write(to: fileURL, options: .atomic)
+            } catch {
+                Debug.log(
+                    "Failed to write pending-change ledger error=\(error)",
+                    channel: .pendingLedger,
+                    source: "Persistence"
+                )
+            }
+        }
+
+        private func preserveCorruptLedger() {
+            guard fileManager.fileExists(atPath: fileURL.path) else { return }
+
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let corruptURL = fileURL.deletingLastPathComponent()
+                .appendingPathComponent("PendingPublicCloudKitChanges.corrupt-\(timestamp).json")
+
+            do {
+                try fileManager.moveItem(at: fileURL, to: corruptURL)
+            } catch {
+                Debug.log(
+                    "Failed to preserve corrupt ledger error=\(error)",
+                    channel: .pendingLedger,
+                    source: "Persistence"
+                )
+            }
+        }
+    }
+
+    private static let pendingChangeLedger = PendingCloudKitChangeLedger()
+
+    @discardableResult
+    func recordPendingAdd(entityName: String, entityID: UUID, timestamp: Date = Date()) -> UUID {
+        Self.pendingChangeLedger.record(entityName: entityName, entityID: entityID, operation: .add, timestamp: timestamp)
+    }
+
+    @discardableResult
+    func recordPendingUpdate(entityName: String, entityID: UUID, timestamp: Date = Date()) -> UUID {
+        Self.pendingChangeLedger.record(entityName: entityName, entityID: entityID, operation: .update, timestamp: timestamp)
+    }
+
+    @discardableResult
+    func recordPendingDelete(entityName: String, entityID: UUID, timestamp: Date = Date()) -> UUID {
+        Self.pendingChangeLedger.record(entityName: entityName, entityID: entityID, operation: .delete, timestamp: timestamp)
+    }
+
+    func markPendingChangeApplied(_ id: UUID) {
+        Self.pendingChangeLedger.markApplied(id: id)
+    }
+
+    func markPendingChangeFailed(_ id: UUID, errorMessage: String) {
+        Self.pendingChangeLedger.markFailed(id: id, errorMessage: errorMessage)
+    }
+
+    func hasUnresolvedPendingChange(entityName: String, entityID: UUID) -> Bool {
+        Self.pendingChangeLedger.hasUnresolvedChange(entityName: entityName, entityID: entityID)
+    }
+
     // Section 0B: CloudKit mirroring diagnostics
     // Logs import/export lifecycle events from NSPersistentCloudKitContainer so we can distinguish
     // between UI refresh issues and CloudKit mirroring delays or failures.
@@ -43,7 +300,11 @@ struct PersistenceController {
         ) { notification in
             guard let event = notification.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey]
                     as? NSPersistentCloudKitContainer.Event else {
-                print("[Persistence][CloudKitEvent] Received event notification without event payload")
+                Debug.log(
+                    "Received event notification without event payload",
+                    channel: .cloudKitEvents,
+                    source: "Persistence"
+                )
                 return
             }
 
@@ -62,101 +323,492 @@ struct PersistenceController {
             let successDescription = event.succeeded ? "succeeded" : "not-succeeded"
             let errorDescription = event.error.map { " error=\($0)" } ?? ""
 
-            print("[Persistence][CloudKitEvent] type=\(typeDescription) status=\(successDescription) start=\(event.startDate) end=\(String(describing: event.endDate))\(errorDescription)")
+            Debug.log(
+                "type=\(typeDescription) status=\(successDescription) start=\(event.startDate) end=\(String(describing: event.endDate))\(errorDescription)",
+                channel: .cloudKitEvents,
+                source: "Persistence"
+            )
         }
     }
 
     // Section 0C: Public CloudKit reconciliation
-    // Public CloudKit mirroring may leave a stale local Expense if another owner deletes the public record.
-    // This method queries the Public Database for current CD_Expense CD_id values and removes local
-    // Expense records whose UUID no longer exists in CloudKit. It only deletes after a successful
-    // CloudKit query so temporary network/auth failures do not remove local data.
+    // Reconciles confirmed Public CloudKit state with local records while preserving local
+    // pending changes that NSPersistentCloudKitContainer has not exported/imported yet.
     func reconcileLocalExpensesWithPublicCloudKit(completion: (() -> Void)? = nil) {
-        let database = cloudKitContainer.publicCloudDatabase
-        let query = CKQuery(recordType: "CD_Expense", predicate: NSPredicate(value: true))
-        let operation = CKQueryOperation(query: query)
-        operation.desiredKeys = ["CD_id"]
-        operation.resultsLimit = CKQueryOperation.maximumResults
+        reconcilePendingPublicCloudKitChanges(completion: completion)
+    }
 
-        var publicExpenseIDs = Set<String>()
-        var recordReadErrors: [Error] = []
-
-        operation.recordMatchedBlock = { _, result in
-            switch result {
-            case .success(let record):
-                if let uuid = record["CD_id"] as? UUID {
-                    publicExpenseIDs.insert(uuid.uuidString.uppercased())
-                } else if let stringValue = record["CD_id"] as? String,
-                          let uuid = UUID(uuidString: stringValue) {
-                    publicExpenseIDs.insert(uuid.uuidString.uppercased())
-                } else if let stringValue = record["CD_id"] as? String {
-                    publicExpenseIDs.insert(stringValue.uppercased())
-                }
-            case .failure(let error):
-                recordReadErrors.append(error)
+    func reconcilePendingPublicCloudKitChanges(completion: (() -> Void)? = nil) {
+        Debug.log(
+            "Starting pending public CloudKit reconciliation",
+            channel: .sync,
+            source: "Persistence"
+        )
+        fetchPublicRecordState(recordType: "CD_Expense") { expenseResult in
+            self.fetchPublicRecordState(recordType: "CD_Booking") { bookingResult in
+                self.applyPendingChangeReconciliation(expenseResult: expenseResult,
+                                                      bookingResult: bookingResult,
+                                                      completion: completion)
             }
         }
+    }
 
-        operation.queryResultBlock = { result in
-            if !recordReadErrors.isEmpty {
-                print("[Persistence][PublicReconcile] Expense reconciliation skipped due to record read errors: \(recordReadErrors)")
-                DispatchQueue.main.async {
-                    completion?()
+    private func fetchPublicRecordState(recordType: String,
+                                        completion: @escaping (Result<PublicCloudKitRecordState, Error>) -> Void) {
+        let database = cloudKitContainer.publicCloudDatabase
+        let lock = NSLock()
+        var ids = Set<UUID>()
+        var lastModifiedAtByID: [UUID: Date] = [:]
+        var recordsByID: [UUID: CKRecord] = [:]
+        var recordReadErrors: [Error] = []
+
+        func addOperation(_ operation: CKQueryOperation) {
+            operation.desiredKeys = [
+                "CD_id",
+                "CD_lastModifiedAt",
+                "CD_createdAt",
+                "CD_createdBy",
+                "CD_lastModifiedBy",
+                "CD_project",
+                "CD_category",
+                "CD_notes",
+                "CD_reimbursementAmount",
+                "CD_expenseDate",
+                "CD_date",
+                "CD_isReimbursed",
+                "CD_propertyName"
+            ]
+            operation.resultsLimit = CKQueryOperation.maximumResults
+
+            operation.recordMatchedBlock = { _, result in
+                lock.lock()
+                defer { lock.unlock() }
+
+                switch result {
+                case .success(let record):
+                    guard let uuid = Self.uuidValue(from: record["CD_id"]) else { return }
+                    ids.insert(uuid)
+                    recordsByID[uuid] = record
+                    if let lastModifiedAt = record["CD_lastModifiedAt"] as? Date {
+                        lastModifiedAtByID[uuid] = lastModifiedAt
+                    }
+                case .failure(let error):
+                    recordReadErrors.append(error)
                 }
-                return
             }
 
-            switch result {
-            case .success(let cursor):
-                if cursor != nil {
-                    print("[Persistence][PublicReconcile] Expense reconciliation skipped because query pagination is not yet handled")
-                    DispatchQueue.main.async {
-                        completion?()
-                    }
+            operation.queryResultBlock = { result in
+                lock.lock()
+                let errors = recordReadErrors
+                lock.unlock()
+
+                if !errors.isEmpty {
+                    completion(.failure(NSError(
+                        domain: "ArmadilloAssistant.PublicCloudKitReconcile",
+                        code: 1001,
+                        userInfo: [NSLocalizedDescriptionKey: "\(recordType) query had record read errors: \(errors)"]
+                    )))
                     return
                 }
 
-                let context = container.viewContext
-                context.perform {
-                    let request: NSFetchRequest<Expense> = Expense.fetchRequest()
-                    request.sortDescriptors = [
-                        NSSortDescriptor(key: "createdAt", ascending: true)
-                    ]
-
-                    do {
-                        let localExpenses = try context.fetch(request)
-                        var removedCount = 0
-
-                        for expense in localExpenses {
-                            guard let localID = expense.id?.uuidString.uppercased() else { continue }
-                            guard !publicExpenseIDs.contains(localID) else { continue }
-
-                            context.delete(expense)
-                            removedCount += 1
-                        }
-
-                        if removedCount > 0, context.hasChanges {
-                            try context.save()
-                        }
-
-                        print("[Persistence][PublicReconcile] Public CD_Expense count=\(publicExpenseIDs.count) local stale expenses removed=\(removedCount)")
-                    } catch {
-                        print("[Persistence][PublicReconcile] Expense reconciliation failed: \(error)")
+                switch result {
+                case .success(let cursor):
+                    if let cursor {
+                        addOperation(CKQueryOperation(cursor: cursor))
+                    } else {
+                        lock.lock()
+                        let state = PublicCloudKitRecordState(
+                            ids: ids,
+                            lastModifiedAtByID: lastModifiedAtByID,
+                            recordsByID: recordsByID
+                        )
+                        lock.unlock()
+                        completion(.success(state))
                     }
-
-                    DispatchQueue.main.async {
-                        completion?()
-                    }
+                case .failure(let error):
+                    completion(.failure(error))
                 }
-            case .failure(let error):
-                print("[Persistence][PublicReconcile] Expense reconciliation skipped due to CloudKit query error: \(error)")
-                DispatchQueue.main.async {
-                    completion?()
+            }
+
+            database.add(operation)
+        }
+
+        let query = CKQuery(recordType: recordType, predicate: NSPredicate(value: true))
+        addOperation(CKQueryOperation(query: query))
+    }
+
+    private static func uuidValue(from value: CKRecordValue?) -> UUID? {
+        if let uuid = value as? UUID {
+            return uuid
+        }
+
+        if let stringValue = value as? String {
+            return UUID(uuidString: stringValue)
+        }
+
+        return nil
+    }
+
+    private func applyPendingChangeReconciliation(expenseResult: Result<PublicCloudKitRecordState, Error>,
+                                                  bookingResult: Result<PublicCloudKitRecordState, Error>,
+                                                  completion: (() -> Void)?) {
+        let completionGroup = DispatchGroup()
+
+        switch expenseResult {
+        case .success(let expenseState):
+            reconcilePendingLedgerEntries(entityName: "Expense", publicState: expenseState)
+            completionGroup.enter()
+            reconcileLocalExpensesAgainstPublicState(publicState: expenseState) {
+                completionGroup.leave()
+            }
+        case .failure(let error):
+            Debug.log(
+                "Expense reconciliation skipped due to CloudKit query error=\(error)",
+                channel: .expenseReconcile,
+                source: "Persistence"
+            )
+        }
+
+        switch bookingResult {
+        case .success(let bookingState):
+            reconcilePendingLedgerEntries(entityName: "Booking", publicState: bookingState)
+            Debug.log(
+                "Public CD_Booking count=\(bookingState.ids.count); booking stale cleanup skipped by policy",
+                channel: .bookingReconcile,
+                source: "Persistence"
+            )
+        case .failure(let error):
+            Debug.log(
+                "Booking pending reconciliation skipped due to CloudKit query error=\(error)",
+                channel: .bookingReconcile,
+                source: "Persistence"
+            )
+        }
+
+        completionGroup.notify(queue: .main) {
+            Debug.log(
+                "Completed pending public CloudKit reconciliation",
+                channel: .sync,
+                source: "Persistence"
+            )
+            completion?()
+        }
+    }
+
+    private func reconcilePendingLedgerEntries(entityName: String, publicState: PublicCloudKitRecordState) {
+        let pendingChanges = Self.pendingChangeLedger.unresolvedChanges(entityName: entityName)
+
+        for change in pendingChanges {
+            let publicRecordExists = publicState.ids.contains(change.entityID)
+
+            switch change.operation {
+            case .add:
+                if publicRecordExists {
+                    Debug.log(
+                        "Pending add confirmed in public state entity=\(entityName) entityID=\(change.entityID) changeID=\(change.id)",
+                        channel: .pendingLedger,
+                        source: "Persistence"
+                    )
+                    Self.pendingChangeLedger.markApplied(id: change.id)
+                }
+            case .update:
+                if let publicLastModifiedAt = publicState.lastModifiedAtByID[change.entityID],
+                   publicLastModifiedAt >= change.timestamp {
+                    Debug.log(
+                        "Pending update confirmed in public state entity=\(entityName) entityID=\(change.entityID) changeID=\(change.id)",
+                        channel: .pendingLedger,
+                        source: "Persistence"
+                    )
+                    Self.pendingChangeLedger.markApplied(id: change.id)
+                }
+            case .delete:
+                if !publicRecordExists {
+                    Debug.log(
+                        "Pending delete confirmed absent from public state entity=\(entityName) entityID=\(change.entityID) changeID=\(change.id)",
+                        channel: .pendingLedger,
+                        source: "Persistence"
+                    )
+                    Self.pendingChangeLedger.markApplied(id: change.id)
+                    Self.pendingChangeLedger.markApplied(
+                        entityName: entityName,
+                        entityID: change.entityID,
+                        operations: [.add, .update]
+                    )
                 }
             }
         }
+    }
 
-        database.add(operation)
+    private func reconcileLocalExpensesAgainstPublicState(publicState: PublicCloudKitRecordState,
+                                                          completion: @escaping () -> Void) {
+        let context = container.viewContext
+        context.perform {
+            defer { completion() }
+
+            let request: NSFetchRequest<Expense> = Expense.fetchRequest()
+            request.sortDescriptors = [
+                NSSortDescriptor(key: "createdAt", ascending: true)
+            ]
+
+            do {
+                let localExpenses = try context.fetch(request)
+                let localExpenseIDs = Set(localExpenses.compactMap { $0.id })
+                var removedCount = 0
+                var createdCount = 0
+                var protectedPendingCount = 0
+                var missingIDCount = 0
+                var updatedCount = 0
+
+                for expense in localExpenses {
+                    guard let localID = expense.id else {
+                        missingIDCount += 1
+                        continue
+                    }
+
+                    guard !publicState.ids.contains(localID) else { continue }
+
+                    guard !Self.pendingChangeLedger.hasUnresolvedChange(entityName: "Expense", entityID: localID) else {
+                        protectedPendingCount += 1
+                        continue
+                    }
+
+                    context.delete(expense)
+                    removedCount += 1
+                }
+
+                for expense in localExpenses {
+                    guard let localID = expense.id,
+                          publicState.ids.contains(localID),
+                          let record = publicState.recordsByID[localID] else {
+                        continue
+                    }
+
+                    guard !Self.pendingChangeLedger.hasUnresolvedChange(entityName: "Expense", entityID: localID) else {
+                        protectedPendingCount += 1
+                        continue
+                    }
+
+                    let beforeLastModifiedAt = expense.value(forKey: "lastModifiedAt") as? Date
+                    let publicLastModifiedAt = Self.dateValue(from: record["CD_lastModifiedAt"])
+
+                    if let publicLastModifiedAt,
+                       let beforeLastModifiedAt,
+                       publicLastModifiedAt <= beforeLastModifiedAt {
+                        continue
+                    }
+
+                    updateLocalExpense(expense, from: record, context: context)
+                    updatedCount += 1
+                }
+
+                for publicID in publicState.ids where !localExpenseIDs.contains(publicID) {
+                    guard !Self.pendingChangeLedger.hasUnresolvedChange(entityName: "Expense", entityID: publicID) else {
+                        protectedPendingCount += 1
+                        continue
+                    }
+
+                    guard let record = publicState.recordsByID[publicID] else { continue }
+                    createLocalExpense(from: record, id: publicID, context: context)
+                    createdCount += 1
+                }
+
+                if (removedCount > 0 || createdCount > 0 || updatedCount > 0), context.hasChanges {
+                    try context.save()
+                }
+
+                Debug.log(
+                    "Public CD_Expense count=\(publicState.ids.count) local stale expenses removed=\(removedCount) local missing expenses created=\(createdCount) local expenses updated=\(updatedCount) pending-protected=\(protectedPendingCount) missing-local-id=\(missingIDCount)",
+                    channel: .expenseReconcile,
+                    source: "Persistence"
+                )
+            } catch {
+                Debug.log(
+                    "Expense reconciliation failed error=\(error)",
+                    channel: .expenseReconcile,
+                    source: "Persistence"
+                )
+            }
+        }
+    }
+
+    private func updateLocalExpense(_ expense: Expense, from record: CKRecord, context: NSManagedObjectContext) {
+        expense.project = Self.stringValue(from: record["CD_project"])
+            ?? Self.stringValue(from: record["project"])
+            ?? expense.project
+        expense.category = Self.stringValue(from: record["CD_category"])
+            ?? Self.stringValue(from: record["category"])
+            ?? expense.category
+        expense.notes = Self.stringValue(from: record["CD_notes"])
+            ?? Self.stringValue(from: record["notes"])
+            ?? expense.notes
+        expense.reimbursementAmount = Self.doubleValue(from: record["CD_reimbursementAmount"])
+            ?? Self.doubleValue(from: record["reimbursementAmount"])
+            ?? expense.reimbursementAmount
+
+        if let expenseDate = Self.dateValue(from: record["CD_expenseDate"]) ?? Self.dateValue(from: record["CD_date"]) {
+            setIfAttributeExists("expenseDate", value: expenseDate, object: expense)
+            setIfAttributeExists("date", value: expenseDate, object: expense)
+        }
+
+        if let isReimbursed = Self.boolValue(from: record["CD_isReimbursed"]) {
+            setIfAttributeExists("isReimbursed", value: isReimbursed, object: expense)
+        }
+
+        if let propertyName = Self.stringValue(from: record["CD_propertyName"]) {
+            setIfAttributeExists("propertyName", value: propertyName, object: expense)
+        }
+
+        if let createdAt = Self.dateValue(from: record["CD_createdAt"]) {
+            setIfAttributeExists("createdAt", value: createdAt, object: expense)
+        }
+
+        if let lastModifiedAt = Self.dateValue(from: record["CD_lastModifiedAt"]) {
+            setIfAttributeExists("lastModifiedAt", value: lastModifiedAt, object: expense)
+        }
+
+        if let createdBy = Self.stringValue(from: record["CD_createdBy"]) {
+            setIfAttributeExists("createdBy", value: createdBy, object: expense)
+        }
+
+        if let lastModifiedBy = Self.stringValue(from: record["CD_lastModifiedBy"]) {
+            setIfAttributeExists("lastModifiedBy", value: lastModifiedBy, object: expense)
+        }
+
+        attachWorkspaceReferences(to: expense, context: context)
+        attachExpenseReferenceData(to: expense, context: context)
+    }
+
+    private func createLocalExpense(from record: CKRecord, id: UUID, context: NSManagedObjectContext) {
+        let expense = Expense(context: context)
+        let now = Date()
+
+        expense.id = id
+        expense.project = Self.stringValue(from: record["CD_project"])
+            ?? Self.stringValue(from: record["project"])
+            ?? ""
+        expense.category = Self.stringValue(from: record["CD_category"])
+            ?? Self.stringValue(from: record["category"])
+            ?? ""
+        expense.notes = Self.stringValue(from: record["CD_notes"])
+            ?? Self.stringValue(from: record["notes"])
+            ?? ""
+        expense.reimbursementAmount = Self.doubleValue(from: record["CD_reimbursementAmount"])
+            ?? Self.doubleValue(from: record["reimbursementAmount"])
+            ?? 0
+
+        setIfAttributeExists("expenseDate", value: Self.dateValue(from: record["CD_expenseDate"]) ?? Self.dateValue(from: record["CD_date"]) ?? now, object: expense)
+        setIfAttributeExists("date", value: Self.dateValue(from: record["CD_date"]) ?? Self.dateValue(from: record["CD_expenseDate"]) ?? now, object: expense)
+        setIfAttributeExists("isReimbursed", value: Self.boolValue(from: record["CD_isReimbursed"]) ?? false, object: expense)
+        setIfAttributeExists("propertyName", value: Self.stringValue(from: record["CD_propertyName"]) ?? "", object: expense)
+
+        setIfAttributeExists("createdAt", value: Self.dateValue(from: record["CD_createdAt"]) ?? now, object: expense)
+        setIfAttributeExists("lastModifiedAt", value: Self.dateValue(from: record["CD_lastModifiedAt"]) ?? now, object: expense)
+        setIfAttributeExists("createdBy", value: Self.stringValue(from: record["CD_createdBy"]) ?? "Public CloudKit", object: expense)
+        setIfAttributeExists("lastModifiedBy", value: Self.stringValue(from: record["CD_lastModifiedBy"]) ?? "Public CloudKit", object: expense)
+
+        attachWorkspaceReferences(to: expense, context: context)
+        attachExpenseReferenceData(to: expense, context: context)
+    }
+
+    private func attachWorkspaceReferences(to expense: Expense, context: NSManagedObjectContext) {
+        do {
+            if let workspace = try fetchCanonicalWorkspace(context: context) {
+                expense.setValue(workspace, forKey: "workspaceRef")
+            }
+        } catch {
+            Debug.log(
+                "Failed to attach imported Expense to workspace error=\(error)",
+                channel: .expenseReconcile,
+                source: "Persistence"
+            )
+        }
+    }
+
+    private func attachExpenseReferenceData(to expense: Expense, context: NSManagedObjectContext) {
+        do {
+            let projectKey = normalizedLookupKey(expense.project)
+            if !projectKey.isEmpty {
+                let projectRequest: NSFetchRequest<ExpenseProject> = ExpenseProject.fetchRequest()
+                projectRequest.fetchLimit = 1
+                projectRequest.predicate = NSPredicate(format: "name =[c] %@", expense.project ?? "")
+                if let project = try context.fetch(projectRequest).first {
+                    expense.projectRef = project
+                }
+            }
+
+            let categoryKey = normalizedLookupKey(expense.category)
+            if !categoryKey.isEmpty {
+                let categoryRequest: NSFetchRequest<ExpenseCategory> = ExpenseCategory.fetchRequest()
+                categoryRequest.fetchLimit = 1
+                categoryRequest.predicate = NSPredicate(format: "name =[c] %@", expense.category ?? "")
+                if let category = try context.fetch(categoryRequest).first {
+                    expense.categoryRef = category
+                }
+            }
+        } catch {
+            Debug.log(
+                "Failed to attach imported Expense reference data error=\(error)",
+                channel: .expenseReconcile,
+                source: "Persistence"
+            )
+        }
+    }
+
+    private static func stringValue(from value: CKRecordValue?) -> String? {
+        if let stringValue = value as? String {
+            return stringValue
+        }
+
+        if let numberValue = value as? NSNumber {
+            return numberValue.stringValue
+        }
+
+        return nil
+    }
+
+    private static func doubleValue(from value: CKRecordValue?) -> Double? {
+        if let doubleValue = value as? Double {
+            return doubleValue
+        }
+
+        if let numberValue = value as? NSNumber {
+            return numberValue.doubleValue
+        }
+
+        if let stringValue = value as? String {
+            return Double(stringValue)
+        }
+
+        return nil
+    }
+
+    private static func boolValue(from value: CKRecordValue?) -> Bool? {
+        if let boolValue = value as? Bool {
+            return boolValue
+        }
+
+        if let numberValue = value as? NSNumber {
+            return numberValue.boolValue
+        }
+
+        if let stringValue = value as? String {
+            return Bool(stringValue)
+        }
+
+        return nil
+    }
+
+    private static func dateValue(from value: CKRecordValue?) -> Date? {
+        if let dateValue = value as? Date {
+            return dateValue
+        }
+
+        return nil
+    }
+
+    private func setIfAttributeExists(_ key: String, value: Any, object: NSManagedObject) {
+        guard object.entity.attributesByName[key] != nil else { return }
+        object.setValue(value, forKey: key)
     }
 
     init(inMemory: Bool = false) {

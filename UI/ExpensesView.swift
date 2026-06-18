@@ -325,10 +325,12 @@ struct ExpensesView: View {
             let workspace = fetchWorkspace(context: context)
             let trimmedProjects = fetchProjectMap(context: context)
             let trimmedCategories = fetchCategoryMap(context: context)
+            var importedExpenseIDs: [UUID] = []
 
             for parsedRow in parsedRows {
                 let expense = Expense(context: context)
-                expense.id = UUID()
+                let expenseID = UUID()
+                expense.id = expenseID
                 expense.expenseType = parsedRow.expenseType
                 expense.expenseDate = parsedRow.expenseDate
                 expense.project = parsedRow.project
@@ -347,11 +349,19 @@ struct ExpensesView: View {
                 expense.projectRef = trimmedProjects[parsedRow.project.trimmingCharacters(in: .whitespacesAndNewlines)]
                 expense.categoryRef = trimmedCategories[parsedRow.category.trimmingCharacters(in: .whitespacesAndNewlines)]
                 expense.workspaceRef = workspace
+                importedExpenseIDs.append(expenseID)
+            }
+
+            let pendingAddIDs = importedExpenseIDs.map { expenseID in
+                PersistenceController.shared.recordPendingAdd(entityName: "Expense", entityID: expenseID, timestamp: now)
             }
 
             do {
                 try context.save()
             } catch {
+                for pendingAddID in pendingAddIDs {
+                    PersistenceController.shared.markPendingChangeFailed(pendingAddID, errorMessage: error.localizedDescription)
+                }
                 context.rollback()
                 throw error
             }
@@ -647,6 +657,12 @@ struct ExpensesView: View {
 
         guard existingCount > 0 else { return 0 }
 
+        let idRequest: NSFetchRequest<Expense> = Expense.fetchRequest()
+        let expenseIDs = try context.fetch(idRequest).compactMap(\.id)
+        let pendingDeleteIDs = expenseIDs.map {
+            PersistenceController.shared.recordPendingDelete(entityName: "Expense", entityID: $0)
+        }
+
         let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
         deleteRequest.resultType = .resultTypeObjectIDs
 
@@ -660,6 +676,9 @@ struct ExpensesView: View {
             }
             return existingCount
         } catch {
+            for pendingDeleteID in pendingDeleteIDs {
+                PersistenceController.shared.markPendingChangeFailed(pendingDeleteID, errorMessage: error.localizedDescription)
+            }
             throw ExpenseBulkDeleteError.failedToDelete
         }
     }
@@ -744,7 +763,8 @@ struct ExpensesView: View {
         let reimbursementAmount = expenseAmount + (mileage * mileageRate)
 
         let expense = Expense(context: viewContext)
-        expense.id = UUID()
+        let expenseID = UUID()
+        expense.id = expenseID
         expense.expenseType = draft.expenseType
         expense.expenseDate = draft.expenseDate
         expense.project = draft.projectName
@@ -764,9 +784,12 @@ struct ExpensesView: View {
         expense.categoryRef = activeCategories.first(where: { $0.name == draft.categoryName })
         expense.workspaceRef = fetchWorkspaceForNewExpense()
 
+        let pendingAddID = PersistenceController.shared.recordPendingAdd(entityName: "Expense", entityID: expenseID, timestamp: now)
+
         do {
             try viewContext.save()
         } catch {
+            PersistenceController.shared.markPendingChangeFailed(pendingAddID, errorMessage: error.localizedDescription)
             viewContext.rollback()
         }
     }
@@ -775,6 +798,9 @@ struct ExpensesView: View {
         guard let storedExpense = storedExpenses.first(where: { $0.objectID == expenseID }) else { return }
 
         let now = Date()
+        if storedExpense.id == nil {
+            storedExpense.id = UUID()
+        }
         let expenseAmount = decimalValue(from: draft.expenseAmountText)
         let mileage = decimalValue(from: draft.mileageText)
         let mileageRate = decimalValue(from: draft.mileageRateText)
@@ -801,6 +827,9 @@ struct ExpensesView: View {
 
         do {
             try viewContext.save()
+            if let storedExpenseID = storedExpense.id {
+                PersistenceController.shared.recordPendingUpdate(entityName: "Expense", entityID: storedExpenseID, timestamp: now)
+            }
         } catch {
             viewContext.rollback()
         }
@@ -817,9 +846,15 @@ struct ExpensesView: View {
             return
         }
 
-        viewContext.delete(storedExpense)
+        let pendingDeleteID: UUID?
+        if let storedExpenseID = storedExpense.id {
+            pendingDeleteID = PersistenceController.shared.recordPendingDelete(entityName: "Expense", entityID: storedExpenseID)
+        } else {
+            pendingDeleteID = nil
+        }
 
         do {
+            viewContext.delete(storedExpense)
             try viewContext.save()
             selectedExpenseID = nil
             draftExpense = nil
@@ -828,6 +863,9 @@ struct ExpensesView: View {
             pendingSwipeDeleteExpense = nil
             isShowingDetails = false
         } catch {
+            if let pendingDeleteID {
+                PersistenceController.shared.markPendingChangeFailed(pendingDeleteID, errorMessage: error.localizedDescription)
+            }
             viewContext.rollback()
         }
     }
@@ -912,36 +950,67 @@ struct ExpensesView: View {
     }
 
     private func debugExpensePickerReferenceDataStores() {
-        let prefix = "[ExpensesView][CloudKitDiagnostic]"
-
-        print("\(prefix) storedExpenses.count=\(storedExpenses.count)")
-        print("\(prefix) filteredExpenses.count=\(filteredExpenses.count)")
+        Debug.log(
+            "storedExpenses.count=\(storedExpenses.count)",
+            channel: .expenseReconcile,
+            source: "ExpensesView"
+        )
+        Debug.log(
+            "filteredExpenses.count=\(filteredExpenses.count)",
+            channel: .expenseReconcile,
+            source: "ExpensesView"
+        )
         for expense in storedExpenses {
             let expenseID = expense.id?.uuidString ?? "nil"
-            let project = expense.project ?? ""
-            let category = expense.category ?? ""
-            let notes = expense.notes ?? ""
-            let workspaceName = expense.workspaceRef?.name ?? "nil"
+            let workspaceAttached = expense.workspaceRef != nil
             let objectURI = expense.objectID.uriRepresentation().absoluteString
-            print("\(prefix) Expense id='\(expenseID)' project='\(project)' category='\(category)' amount=\(expense.reimbursementAmount) notes='\(notes)' workspaceRef='\(workspaceName)' objectID=\(objectURI) \(storeDescription(for: expense))")
+            Debug.log(
+                "Expense id=\(expenseID) workspaceAttached=\(workspaceAttached) objectID=\(objectURI) \(storeDescription(for: expense))",
+                channel: .expenseReconcile,
+                source: "ExpensesView"
+            )
         }
 
-        print("\(prefix) storedProjects.count=\(storedProjects.count)")
-        print("\(prefix) activeProjects.count=\(activeProjects.count)")
+        Debug.log(
+            "storedProjects.count=\(storedProjects.count)",
+            channel: .expenseReconcile,
+            source: "ExpensesView"
+        )
+        Debug.log(
+            "activeProjects.count=\(activeProjects.count)",
+            channel: .expenseReconcile,
+            source: "ExpensesView"
+        )
         for project in storedProjects {
-            let name = project.name ?? ""
-            let workspaceName = project.workspaceRef?.name ?? "nil"
+            let projectID = project.id?.uuidString ?? "nil"
+            let workspaceAttached = project.workspaceRef != nil
             let objectURI = project.objectID.uriRepresentation().absoluteString
-            print("\(prefix) Project name='\(name)' isActive=\(project.isActive) workspaceRef='\(workspaceName)' objectID=\(objectURI) \(storeDescription(for: project))")
+            Debug.log(
+                "Project id=\(projectID) isActive=\(project.isActive) workspaceAttached=\(workspaceAttached) objectID=\(objectURI) \(storeDescription(for: project))",
+                channel: .expenseReconcile,
+                source: "ExpensesView"
+            )
         }
 
-        print("\(prefix) storedCategories.count=\(storedCategories.count)")
-        print("\(prefix) activeCategories.count=\(activeCategories.count)")
+        Debug.log(
+            "storedCategories.count=\(storedCategories.count)",
+            channel: .expenseReconcile,
+            source: "ExpensesView"
+        )
+        Debug.log(
+            "activeCategories.count=\(activeCategories.count)",
+            channel: .expenseReconcile,
+            source: "ExpensesView"
+        )
         for category in storedCategories {
-            let name = category.name ?? ""
-            let workspaceName = category.workspaceRef?.name ?? "nil"
+            let categoryID = category.id?.uuidString ?? "nil"
+            let workspaceAttached = category.workspaceRef != nil
             let objectURI = category.objectID.uriRepresentation().absoluteString
-            print("\(prefix) Category name='\(name)' isActive=\(category.isActive) workspaceRef='\(workspaceName)' objectID=\(objectURI) \(storeDescription(for: category))")
+            Debug.log(
+                "Category id=\(categoryID) isActive=\(category.isActive) workspaceAttached=\(workspaceAttached) objectID=\(objectURI) \(storeDescription(for: category))",
+                channel: .expenseReconcile,
+                source: "ExpensesView"
+            )
         }
     }
 

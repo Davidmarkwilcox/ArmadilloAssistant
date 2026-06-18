@@ -552,6 +552,7 @@ struct BookingsView: View {
             var existingKeys = Set(fetchExistingBookingKeys(context: context))
             var importedCount = 0
             var skippedDuplicateCount = 0
+            var importedBookingIDs: [UUID] = []
 
             for parsedRow in parsedRows {
                 let importKey = makeMatchKey(
@@ -570,7 +571,8 @@ struct BookingsView: View {
                 }
 
                 let booking = Booking(context: context)
-                booking.id = UUID()
+                let bookingID = UUID()
+                booking.id = bookingID
                 booking.propertyName = parsedRow.propertyName
                 booking.propertyRef = trimmedProperties[parsedRow.propertyName.trimmingCharacters(in: .whitespacesAndNewlines)]
                 booking.checkInDate = parsedRow.checkInDate
@@ -601,6 +603,7 @@ struct BookingsView: View {
                 booking.lastModifiedAt = now
                 booking.lastModifiedBy = "CSV Import"
                 existingKeys.insert(importKey)
+                importedBookingIDs.append(bookingID)
                 importedCount += 1
             }
 
@@ -617,10 +620,17 @@ struct BookingsView: View {
                 )
             }
 
+            let pendingAddIDs = importedBookingIDs.map { bookingID in
+                PersistenceController.shared.recordPendingAdd(entityName: "Booking", entityID: bookingID, timestamp: now)
+            }
+
             do {
                 try context.save()
                 print("[BookingCSVImport] Save success")
             } catch {
+                for pendingAddID in pendingAddIDs {
+                    PersistenceController.shared.markPendingChangeFailed(pendingAddID, errorMessage: error.localizedDescription)
+                }
                 context.rollback()
                 print("[BookingCSVImport] Save failure: \(error.localizedDescription)")
                 throw error
@@ -1153,6 +1163,12 @@ struct BookingsView: View {
 
         guard existingCount > 0 else { return 0 }
 
+        let idRequest: NSFetchRequest<Booking> = Booking.fetchRequest()
+        let bookingIDs = try context.fetch(idRequest).compactMap(\.id)
+        let pendingDeleteIDs = bookingIDs.map {
+            PersistenceController.shared.recordPendingDelete(entityName: "Booking", entityID: $0)
+        }
+
         let deleteRequest = NSBatchDeleteRequest(fetchRequest: fetchRequest)
         deleteRequest.resultType = .resultTypeObjectIDs
 
@@ -1166,6 +1182,9 @@ struct BookingsView: View {
             }
             return existingCount
         } catch {
+            for pendingDeleteID in pendingDeleteIDs {
+                PersistenceController.shared.markPendingChangeFailed(pendingDeleteID, errorMessage: error.localizedDescription)
+            }
             throw BookingBulkDeleteError.failedToDelete
         }
     }
@@ -1553,11 +1572,22 @@ struct BookingsView: View {
         booking.notes = draft.notes
         booking.lastModifiedAt = now
         booking.lastModifiedBy = "System"
+        let pendingAddID = isNewBooking
+            ? PersistenceController.shared.recordPendingAdd(entityName: "Booking", entityID: draft.id, timestamp: now)
+            : nil
 
         do {
             try viewContext.save()
+            if let bookingID = booking.id {
+                if !isNewBooking {
+                    PersistenceController.shared.recordPendingUpdate(entityName: "Booking", entityID: bookingID, timestamp: now)
+                }
+            }
             selectedReservationID = draft.id
         } catch {
+            if let pendingAddID {
+                PersistenceController.shared.markPendingChangeFailed(pendingAddID, errorMessage: error.localizedDescription)
+            }
             let nsError = error as NSError
             print("[BookingsView] Failed to save booking: \(nsError), \(nsError.userInfo)")
         }
@@ -1623,11 +1653,20 @@ struct BookingsView: View {
             draftReservation = nil
         }
 
-        viewContext.delete(booking)
+        let pendingDeleteID: UUID?
+        if let bookingID = booking.id {
+            pendingDeleteID = PersistenceController.shared.recordPendingDelete(entityName: "Booking", entityID: bookingID)
+        } else {
+            pendingDeleteID = nil
+        }
 
         do {
+            viewContext.delete(booking)
             try viewContext.save()
         } catch {
+            if let pendingDeleteID {
+                PersistenceController.shared.markPendingChangeFailed(pendingDeleteID, errorMessage: error.localizedDescription)
+            }
             let nsError = error as NSError
             print("[BookingsView] Failed to delete booking: \(nsError), \(nsError.userInfo)")
         }
