@@ -17,6 +17,7 @@
 		8A6CC8272F54F161003965C0 /* ExpensesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CC8262F54F161003965C0 /* ExpensesView.swift */; };
 		8A6CC8292F58EE86003965C0 /* AppLockManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CC8282F58EE86003965C0 /* AppLockManager.swift */; };
 		8A6CC82B2F5BA1B9003965C0 /* CloudKitSharingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A6CC82A2F5BA1B9003965C0 /* CloudKitSharingManager.swift */; };
+		8A86B6AE2FE4AC57008B1B3E /* DebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A86B6AD2FE4AC56008B1B3E /* DebugView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +32,7 @@
 		8A6CC8262F54F161003965C0 /* ExpensesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpensesView.swift; sourceTree = "<group>"; };
 		8A6CC8282F58EE86003965C0 /* AppLockManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLockManager.swift; sourceTree = "<group>"; };
 		8A6CC82A2F5BA1B9003965C0 /* CloudKitSharingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSharingManager.swift; sourceTree = "<group>"; };
+		8A86B6AD2FE4AC56008B1B3E /* DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -103,6 +105,7 @@
 				8A6CC81E2F54DC6E003965C0 /* SettingsView.swift */,
 				8A6CC8202F54E67C003965C0 /* NarrativeView.swift */,
 				8A6CC8262F54F161003965C0 /* ExpensesView.swift */,
+				8A86B6AD2FE4AC56008B1B3E /* DebugView.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -198,6 +201,7 @@
 				8A6CC81F2F54DC6E003965C0 /* SettingsView.swift in Sources */,
 				8A4BF1BB2F5138920084FE72 /* Theme.swift in Sources */,
 				8A6CC8252F54E8F6003965C0 /* NarrativeCalculations.swift in Sources */,
+				8A86B6AE2FE4AC57008B1B3E /* DebugView.swift in Sources */,
 				8A6CC8272F54F161003965C0 /* ExpensesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

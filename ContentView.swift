@@ -187,6 +187,7 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 self.viewContext.refreshAllObjects()
                 self.viewContext.processPendingChanges()
+                self.updateDebugSessionSummary(refreshDate: Date())
                 self.appRefreshToken = UUID()
 
                 Debug.log(
@@ -195,6 +196,40 @@ struct ContentView: View {
                     source: "ContentView"
                 )
             }
+        }
+    }
+
+    private func updateDebugSessionSummary(refreshDate: Date) {
+        let expenseCount = fetchEntityCount(entityName: "Expense")
+        let bookingCount = fetchEntityCount(entityName: "Booking")
+        let selectedTabName = selectedTab.wrappedValue.rawValue
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .medium
+
+        DebugManager.shared.updateSessionSummary([
+            "Selected tab: \(selectedTabName)",
+            "Local Expense count: \(expenseCount.map(String.init) ?? "Unavailable")",
+            "Local Booking count: \(bookingCount.map(String.init) ?? "Unavailable")",
+            "Last app-wide refresh: \(formatter.string(from: refreshDate))",
+            "CloudKit reached: see CloudKit Events / Reconcile entries for latest result"
+        ])
+    }
+
+    private func fetchEntityCount(entityName: String) -> Int? {
+        let request = NSFetchRequest<NSFetchRequestResult>(entityName: entityName)
+        request.includesSubentities = false
+
+        do {
+            return try viewContext.count(for: request)
+        } catch {
+            Debug.log(
+                "Failed to fetch \(entityName) count for debug summary: \(error.localizedDescription)",
+                channel: .uiRefresh,
+                source: "ContentView"
+            )
+            return nil
         }
     }
 

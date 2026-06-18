@@ -453,15 +453,20 @@ struct PersistenceController {
                                                   bookingResult: Result<PublicCloudKitRecordState, Error>,
                                                   completion: (() -> Void)?) {
         let completionGroup = DispatchGroup()
+        var cloudKitReachabilitySummary = "CloudKit public queries pending"
+        var publicExpenseCountSummary = "unavailable"
+        var publicBookingCountSummary = "unavailable"
 
         switch expenseResult {
         case .success(let expenseState):
+            publicExpenseCountSummary = "\(expenseState.ids.count)"
             reconcilePendingLedgerEntries(entityName: "Expense", publicState: expenseState)
             completionGroup.enter()
             reconcileLocalExpensesAgainstPublicState(publicState: expenseState) {
                 completionGroup.leave()
             }
         case .failure(let error):
+            publicExpenseCountSummary = "query failed"
             Debug.log(
                 "Expense reconciliation skipped due to CloudKit query error=\(error)",
                 channel: .expenseReconcile,
@@ -471,6 +476,7 @@ struct PersistenceController {
 
         switch bookingResult {
         case .success(let bookingState):
+            publicBookingCountSummary = "\(bookingState.ids.count)"
             reconcilePendingLedgerEntries(entityName: "Booking", publicState: bookingState)
             Debug.log(
                 "Public CD_Booking count=\(bookingState.ids.count); booking stale cleanup skipped by policy",
@@ -478,6 +484,7 @@ struct PersistenceController {
                 source: "Persistence"
             )
         case .failure(let error):
+            publicBookingCountSummary = "query failed"
             Debug.log(
                 "Booking pending reconciliation skipped due to CloudKit query error=\(error)",
                 channel: .bookingReconcile,
@@ -485,9 +492,20 @@ struct PersistenceController {
             )
         }
 
+        switch (expenseResult, bookingResult) {
+        case (.success, .success):
+            cloudKitReachabilitySummary = "CloudKit public queries succeeded"
+        case (.success, .failure):
+            cloudKitReachabilitySummary = "CloudKit public partially reached: Expense succeeded, Booking failed"
+        case (.failure, .success):
+            cloudKitReachabilitySummary = "CloudKit public partially reached: Expense failed, Booking succeeded"
+        case (.failure, .failure):
+            cloudKitReachabilitySummary = "CloudKit public queries failed"
+        }
+
         completionGroup.notify(queue: .main) {
             Debug.log(
-                "Completed pending public CloudKit reconciliation",
+                "Completed pending public CloudKit reconciliation; \(cloudKitReachabilitySummary); publicExpenseCount=\(publicExpenseCountSummary); publicBookingCount=\(publicBookingCountSummary)",
                 channel: .sync,
                 source: "Persistence"
             )

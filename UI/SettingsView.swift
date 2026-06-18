@@ -143,146 +143,9 @@ struct SettingsView: View {
                 case .dataManagement:
                     DataManagementSettingsView()
                 case .debug:
-                    DebugSettingsView()
+                    DebugView()
                 }
             }
-        }
-    }
-}
-
-private struct DebugSettingsView: View {
-    @ObservedObject private var debugManager = DebugManager.shared
-    @State private var debugShareItem: DebugShareItem?
-
-    private struct DebugShareItem: Identifiable {
-        let id = UUID()
-        let url: URL
-    }
-
-    private var channelSummaryText: String {
-        debugManager.activeChannelSummary
-    }
-
-    private var logText: String {
-        debugManager.formattedLogText()
-    }
-
-    private func binding(for channel: DebugChannel) -> Binding<Bool> {
-        Binding(
-            get: { debugManager.isChannelEnabled(channel) },
-            set: { debugManager.setChannel(channel, enabled: $0) }
-        )
-    }
-
-    private func copyLog() {
-        UIPasteboard.general.string = logText
-    }
-
-    private func shareLog() {
-        do {
-            let url = try debugManager.makeTemporaryLogFile()
-            debugShareItem = DebugShareItem(url: url)
-        } catch {
-            print("[DebugSettingsView] Failed to create debug log file: \(error.localizedDescription)")
-        }
-    }
-
-
-    var body: some View {
-        List {
-            Section {
-                Toggle("Debug", isOn: $debugManager.isEnabled)
-
-                Toggle("Quiet Mode", isOn: $debugManager.isQuietModeEnabled)
-                    .disabled(!debugManager.isEnabled)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Active Channels")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Text(channelSummaryText)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                }
-                .padding(.vertical, 4)
-            } footer: {
-                Text("Debug messages are captured only when Debug is on and the message channel is enabled. Quiet Mode hides routine no-change sync messages while preserving errors, pending changes, and meaningful reconciliation activity.")
-            }
-
-            Section {
-                Group {
-                    if debugManager.hasMessages {
-                        ScrollView {
-                            Text(logText)
-                                .font(.caption.monospaced())
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                                .padding(10)
-                        }
-                    } else {
-                        Text("No debug messages this session.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                    }
-                }
-                .frame(minHeight: 220, alignment: .topLeading)
-                .background(Color(.secondarySystemGroupedBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            } header: {
-                Text("Session Log")
-            } footer: {
-                Text("The log starts empty on each fresh app launch and is not saved between sessions.")
-            }
-
-            Section {
-                Button {
-                    copyLog()
-                } label: {
-                    Label("Copy to Clipboard", systemImage: "doc.on.doc")
-                }
-                .disabled(!debugManager.hasMessages)
-
-                Button {
-                    shareLog()
-                } label: {
-                    Label("Share Log", systemImage: "square.and.arrow.up")
-                }
-                .disabled(!debugManager.hasMessages)
-
-                Button(role: .destructive) {
-                    debugManager.clear()
-                } label: {
-                    Label("Clear Log", systemImage: "trash")
-                }
-                .disabled(!debugManager.hasMessages)
-            }
-
-            Section {
-                Button {
-                    debugManager.enableAllChannels()
-                } label: {
-                    Label("Enable All Channels", systemImage: "checkmark.circle")
-                }
-
-                Button {
-                    debugManager.disableAllChannels()
-                } label: {
-                    Label("Disable All Channels", systemImage: "xmark.circle")
-                }
-
-                ForEach(DebugChannel.allCases) { channel in
-                    Toggle(channel.displayName, isOn: binding(for: channel))
-                }
-            } header: {
-                Text("Channels")
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Debug")
-        .sheet(item: $debugShareItem) { item in
-            ActivityViewSheet(activityItems: [item.url])
         }
     }
 }
@@ -2092,21 +1955,6 @@ private struct DataManagementSettingsView: View {
     }
 }
 
-
-private struct ActivityViewSheet: UIViewControllerRepresentable {
-    let activityItems: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(
-            activityItems: activityItems,
-            applicationActivities: nil
-        )
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
-        // No live update needed. Each export uses a fresh sheet item.
-    }
-}
 
 private extension Color {
     init?(hex: String) {

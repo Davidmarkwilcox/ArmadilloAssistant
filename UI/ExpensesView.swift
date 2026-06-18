@@ -950,64 +950,41 @@ struct ExpensesView: View {
     }
 
     private func debugExpensePickerReferenceDataStores() {
+        let expenseIDs = storedExpenses.compactMap(\.id)
+        let duplicateExpenseGroups = Dictionary(grouping: storedExpenses) { expense in
+            expense.id?.uuidString ?? "nil"
+        }
+        .filter { key, expenses in
+            key != "nil" && expenses.count > 1
+        }
+
         Debug.log(
-            "storedExpenses.count=\(storedExpenses.count)",
+            "Expense summary: stored=\(storedExpenses.count) filtered=\(filteredExpenses.count) duplicateIDGroups=\(duplicateExpenseGroups.count) projects=\(storedProjects.count) activeProjects=\(activeProjects.count) categories=\(storedCategories.count) activeCategories=\(activeCategories.count)",
             channel: .expenseReconcile,
             source: "ExpensesView"
         )
-        Debug.log(
-            "filteredExpenses.count=\(filteredExpenses.count)",
-            channel: .expenseReconcile,
-            source: "ExpensesView"
-        )
-        for expense in storedExpenses {
-            let expenseID = expense.id?.uuidString ?? "nil"
-            let workspaceAttached = expense.workspaceRef != nil
-            let objectURI = expense.objectID.uriRepresentation().absoluteString
+
+        let nilExpenseIDCount = storedExpenses.filter { $0.id == nil }.count
+        if nilExpenseIDCount > 0 {
             Debug.log(
-                "Expense id=\(expenseID) workspaceAttached=\(workspaceAttached) objectID=\(objectURI) \(storeDescription(for: expense))",
+                "Expense warning: nilIDCount=\(nilExpenseIDCount)",
                 channel: .expenseReconcile,
                 source: "ExpensesView"
             )
         }
 
-        Debug.log(
-            "storedProjects.count=\(storedProjects.count)",
-            channel: .expenseReconcile,
-            source: "ExpensesView"
-        )
-        Debug.log(
-            "activeProjects.count=\(activeProjects.count)",
-            channel: .expenseReconcile,
-            source: "ExpensesView"
-        )
-        for project in storedProjects {
-            let projectID = project.id?.uuidString ?? "nil"
-            let workspaceAttached = project.workspaceRef != nil
-            let objectURI = project.objectID.uriRepresentation().absoluteString
+        for (expenseID, expenses) in duplicateExpenseGroups.sorted(by: { $0.key < $1.key }) {
+            let objectURIs = expenses.map { $0.objectID.uriRepresentation().absoluteString }.joined(separator: ", ")
             Debug.log(
-                "Project id=\(projectID) isActive=\(project.isActive) workspaceAttached=\(workspaceAttached) objectID=\(objectURI) \(storeDescription(for: project))",
+                "Expense duplicate: id=\(expenseID) count=\(expenses.count) objectIDs=[\(objectURIs)]",
                 channel: .expenseReconcile,
                 source: "ExpensesView"
             )
         }
 
-        Debug.log(
-            "storedCategories.count=\(storedCategories.count)",
-            channel: .expenseReconcile,
-            source: "ExpensesView"
-        )
-        Debug.log(
-            "activeCategories.count=\(activeCategories.count)",
-            channel: .expenseReconcile,
-            source: "ExpensesView"
-        )
-        for category in storedCategories {
-            let categoryID = category.id?.uuidString ?? "nil"
-            let workspaceAttached = category.workspaceRef != nil
-            let objectURI = category.objectID.uriRepresentation().absoluteString
+        if expenseIDs.count != Set(expenseIDs).count {
             Debug.log(
-                "Category id=\(categoryID) isActive=\(category.isActive) workspaceAttached=\(workspaceAttached) objectID=\(objectURI) \(storeDescription(for: category))",
+                "Expense duplicate warning: storedExpenseIDs=\(expenseIDs.count) uniqueExpenseIDs=\(Set(expenseIDs).count)",
                 channel: .expenseReconcile,
                 source: "ExpensesView"
             )
